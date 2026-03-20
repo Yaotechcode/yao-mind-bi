@@ -1,9 +1,42 @@
+# Dependencies
 node_modules/
+jspm_packages/
+
+# Build output
 dist/
+out/
+build/Release
+
+# Netlify
 .netlify/
-.env.local
-.env.*.local
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# TypeScript
 *.tsbuildinfo
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Coverage
+coverage
+*.lcov
+.nyc_output
+
+# Cache
+.cache
+.parcel-cache
+.npm
+.eslintcache
+.stylelintcache
 
 # OS artefacts
 .DS_Store
@@ -12,3 +45,41 @@ Thumbs.db
 # Editor
 .vscode/settings.json
 .idea/
+.vscode-test
+
+# Misc
+*.pid
+*.seed
+*.pid.lock
+*.tgz
+.yarn-integrity
+.node_repl_history
+.grunt
+lib-cov
+.lock-wscript
+web_modules/
+
+# Framework caches
+.next
+.nuxt
+.temp
+.svelte-kit/
+.vitepress/dist
+.vitepress/cache
+.docusaurus
+.serverless/
+.fusebox/
+.dynamodb/
+.firebase/
+.tern-port
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# yarn v3
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
