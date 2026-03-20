@@ -15,3 +15,6 @@ export type { QueryStats } from './useQueryStats';
 
 export { useAllYaoAdmins } from './useAllYaoAdmins';
 export type { YaoAdmin } from './useAllYaoAdmins';
+
+export { useProjects } from './useProjects';
+export type { Project } from './useProjects';
