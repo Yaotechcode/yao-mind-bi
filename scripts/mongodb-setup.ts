@@ -4,12 +4,14 @@
  * Run with:
  *   npx tsx scripts/mongodb-setup.ts
  *
- * Requires MONGODB_URI and MONGODB_DB_NAME to be set in the environment
- * (copy .env.example → .env and fill in the values before running).
+ * Requires MONGODB_URI and MONGODB_DB_NAME to be set in .env.local.
+ * Use the standard (non-SRV) connection string to avoid querySrv failures:
+ *   mongodb://user:pass@h1:27017,h2:27017,h3:27017/db?authSource=admin&replicaSet=rs
  */
 
 import { MongoClient, type Db } from 'mongodb';
-import 'dotenv/config';
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
 
 // =============================================================================
 // Helpers
