@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.netlify/
+.env.local
+.env.*.local
+*.tsbuildinfo
+
+# OS artefacts
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea/

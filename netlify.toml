@@ -1,0 +1,27 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "src/server/functions"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[dev]
+  command = "npm run build -- --watch"
+  framework = "#custom"
+  targetPort = 3000
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+# Environment variable placeholders (set these in Netlify UI or .env.local)
+# SUPABASE_URL          — Your Supabase project URL
+# SUPABASE_ANON_KEY     — Supabase anon/public key (safe for client)
+# SUPABASE_SERVICE_ROLE_KEY — Supabase service role key (server only, keep secret)
+# MONGODB_URI           — MongoDB Atlas connection string
+# MONGODB_DB_NAME       — MongoDB database name
