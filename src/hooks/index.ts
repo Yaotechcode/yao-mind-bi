@@ -12,3 +12,6 @@ export type { HelpQueryCategory } from './useQueryCategories';
 
 export { useQueryStats } from './useQueryStats';
 export type { QueryStats } from './useQueryStats';
+
+export { useAllYaoAdmins } from './useAllYaoAdmins';
+export type { YaoAdmin } from './useAllYaoAdmins';

@@ -1,0 +1,124 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Core Brand Colors */
+    --primary: 193 98% 35%;
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 193 98% 32%;
+
+    /* Semantic Text Colors */
+    --foreground: 196 72% 18%;
+    --muted-foreground: 212 10% 62%;
+    --menu-foreground: 214 8% 43%;
+
+    /* Background Hierarchy */
+    --background: 195 50% 99%;
+    --card: 0 0% 100%;
+    --card-foreground: 196 72% 18%;
+    --standard-background: 189 20% 96%;
+    --row-background: 180 13% 97%;
+
+    /* Accent Colors */
+    --teal: 180 88% 38%;
+    --pink: 349 72% 63%;
+    --yellow: 43 69% 67%;
+    --orange: 24 72% 64%;
+    --yellow-priority: 41 80% 51%;
+    --purple: 280 56% 61%;
+
+    /* Status Colors (semantic tokens) */
+    --success: 180 88% 38%;
+    --warning: 24 72% 64%;
+    --error: 349 72% 63%;
+
+    /* Neutral Colors */
+    --border: 223 25% 93%;
+    --input: 180 17% 88%;
+    --ring: 193 98% 35%;
+
+    /* Muted/Secondary */
+    --muted: 189 20% 94%;
+    --secondary: 189 20% 94%;
+    --secondary-foreground: 196 72% 18%;
+    --accent: 186 47% 94%;
+    --accent-foreground: 196 72% 18%;
+
+    /* Destructive */
+    --destructive: 349 72% 63%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Popover */
+    --popover: 0 0% 100%;
+    --popover-foreground: 196 72% 18%;
+
+    /* Icon Colors */
+    --icon-main: 212 13% 69%;
+    --icon-record: 191 55% 67%;
+
+    /* Hover States */
+    --hover-record: 180 76% 83%;
+
+    /* Border Radius */
+    --radius: 0.375rem;
+    --radius-sm: 0.1875rem;
+    --radius-lg: 0.5rem;
+    --radius-input: 0.25rem;
+  }
+
+  .dark {
+    --background: 210 29% 8%;
+    --foreground: 210 20% 92%;
+    --card: 210 29% 12%;
+    --card-foreground: 210 20% 92%;
+    --primary: 193 98% 45%;
+    --primary-foreground: 210 29% 8%;
+    --secondary: 210 25% 18%;
+    --secondary-foreground: 210 20% 92%;
+    --muted: 210 25% 15%;
+    --muted-foreground: 210 20% 60%;
+    --accent: 210 25% 18%;
+    --accent-foreground: 210 20% 92%;
+    --destructive: 349 72% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 25% 22%;
+    --input: 210 25% 22%;
+    --ring: 193 98% 45%;
+    --popover: 210 29% 12%;
+    --popover-foreground: 210 20% 92%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--border));
+    border-radius: 3px;
+  }
+}
