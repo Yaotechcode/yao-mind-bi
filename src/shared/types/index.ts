@@ -105,6 +105,14 @@ export interface EntityDefinition {
   entityType: EntityType;
   label: string;
   labelPlural: string;
+  /** Emoji icon for display */
+  icon?: string;
+  /** Short description of what this entity represents */
+  description?: string;
+  /** Whether this is a built-in (system-defined) entity */
+  isBuiltIn?: boolean;
+  /** Where this entity's data originates */
+  dataSource?: string;
   fields: FieldDefinition[];
   relationships: RelationshipDefinition[];
   /** Primary identifier field key */
@@ -266,6 +274,22 @@ export interface FirmConfigTier1 {
   financialYearStartMonth: number; // 1–12
   weekStartDay: 0 | 1; // 0 = Sunday, 1 = Monday
   timezone: string;
+  /** Working time defaults */
+  workingDaysPerWeek?: number;
+  dailyTargetHours?: number;
+  weeklyTargetHours?: number;
+  chargeableWeeklyTarget?: number;
+  annualLeaveEntitlement?: number;
+  bankHolidaysPerYear?: number;
+  /** Cost & pay model config */
+  costRateMethod?: 'fully_loaded' | 'direct' | 'market_rate';
+  defaultFeeSharePercent?: number;
+  defaultFirmRetainPercent?: number;
+  utilisationApproach?: 'assume_fulltime' | 'fte_adjusted';
+  fteCountMethod?: 'full' | 'prorated';
+  revenueAttribution?: 'responsible_lawyer' | 'billing_lawyer' | 'supervisor';
+  showLawyerPerspective?: boolean;
+  showDiscrepancies?: boolean;
 }
 
 export interface FirmConfigTier2 {
@@ -373,6 +397,20 @@ export const FirmConfigTier1Schema = z.object({
   financialYearStartMonth: z.number().int().min(1).max(12),
   weekStartDay: z.union([z.literal(0), z.literal(1)]),
   timezone: z.string().min(1),
+  workingDaysPerWeek: z.number().optional(),
+  dailyTargetHours: z.number().optional(),
+  weeklyTargetHours: z.number().optional(),
+  chargeableWeeklyTarget: z.number().optional(),
+  annualLeaveEntitlement: z.number().optional(),
+  bankHolidaysPerYear: z.number().optional(),
+  costRateMethod: z.enum(['fully_loaded', 'direct', 'market_rate']).optional(),
+  defaultFeeSharePercent: z.number().optional(),
+  defaultFirmRetainPercent: z.number().optional(),
+  utilisationApproach: z.enum(['assume_fulltime', 'fte_adjusted']).optional(),
+  fteCountMethod: z.enum(['full', 'prorated']).optional(),
+  revenueAttribution: z.enum(['responsible_lawyer', 'billing_lawyer', 'supervisor']).optional(),
+  showLawyerPerspective: z.boolean().optional(),
+  showDiscrepancies: z.boolean().optional(),
 });
 
 export const RagGradeThresholdSchema = z.object({
