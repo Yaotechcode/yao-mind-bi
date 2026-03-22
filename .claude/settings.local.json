@@ -19,7 +19,13 @@
       "Bash(grep -rn \"from ''''@/components/ui/select''''\" /c/Projects/projectyao/projectyao/src/pages/)",
       "Bash(find C:Projectsprojectyaoprojectyaosrccomponentsui -type f -name *.tsx)",
       "Bash(git:*)",
-      "Bash(npx vitest:*)"
+      "Bash(npx vitest:*)",
+      "Bash(claude:*)",
+      "Bash(find /c/Projects/yao-mind/src/shared -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\))",
+      "Bash(find /c/Projects/yao-mind/src/server -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\))",
+      "Bash(find /c/Projects/yao-mind/tests -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\))",
+      "Bash(find /c/Projects/yao-mind/src/server -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.js \\\\\\))",
+      "Bash(npm test:*)"
     ]
   }
 }
