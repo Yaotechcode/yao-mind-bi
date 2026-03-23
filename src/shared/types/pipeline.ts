@@ -2,9 +2,42 @@
 // Pipeline-specific types for Stages 2–8.
 // Separate from index.ts (entity/config types) to avoid circular imports.
 
+import type { ColumnMapping } from './index.js';
+
 // =============================================================================
 // Stage 2: Normalise
 // =============================================================================
+
+export type MappingSet = ColumnMapping[];
+
+export interface NormaliseOptions {
+  dateReferencePoint?: Date;           // used for age calculations — defaults to today
+  currencySymbols?: string[];
+  treatEmptyStringAsNull?: boolean;    // default true
+  strictMode?: boolean;                // if true, reject rows with any null required field
+                                       // if false (default), keep row + flag it
+}
+
+export interface RejectedRow {
+  rowIndex: number;
+  rawRow: Record<string, unknown>;
+  reason: string;
+}
+
+export interface NormaliseWarning {
+  field: string;
+  message: string;
+  affectedRowCount: number;
+}
+
+export interface FieldStats {
+  fieldKey: string;
+  totalRows: number;
+  nullCount: number;
+  nullPercent: number;
+  uniqueValueCount: number;
+  sampleValues: unknown[];
+}
 
 /**
  * A single normalised record. All identifier fields are optional — the
@@ -52,6 +85,10 @@ export interface NormaliseResult {
   records: NormalisedRecord[];
   recordCount: number;
   normalisedAt: string; // ISO timestamp
+  // Populated by normaliseRecords() — absent when NormaliseResult is constructed directly
+  rejectedRows?: RejectedRow[];
+  warnings?: NormaliseWarning[];
+  fieldStats?: Record<string, FieldStats>;
 }
 
 // =============================================================================
@@ -174,4 +211,36 @@ export interface CrossReferenceQualityStats {
   unresolvedMatterIds: number;
   unresolvedMatterNumbers: number;
   unresolvedLawyerNames: string[];
+  wipOrphanCount: number;              // WIP entries with no matched matter
+  wipTotalCount: number;               // Total WIP entries processed
+  wipOrphanRate: number;               // % of WIP entries that are orphaned (0–100)
+}
+
+// =============================================================================
+// Stage 4: Index
+// =============================================================================
+
+export interface PipelineIndexes {
+  // Lookup maps — used in the JOIN stage
+  feeEarnerById: Map<string, NormalisedRecord>;
+  feeEarnerByName: Map<string, NormalisedRecord>;       // normalised name → record
+  feeEarnerByNameFuzzy: Array<{ name: string; normalised: string; record: NormalisedRecord }>;
+
+  matterById: Map<string, NormalisedRecord>;
+  matterByNumber: Map<string, NormalisedRecord>;        // matterNumber (as string) → record
+
+  invoiceByMatterNumber: Map<string, NormalisedRecord[]>;  // one matter → many invoices
+
+  clientById: Map<string, NormalisedRecord>;
+  clientByName: Map<string, NormalisedRecord>;          // normalised display name → record
+
+  disbursementByMatterId: Map<string, NormalisedRecord[]>;
+  taskByMatterId: Map<string, NormalisedRecord[]>;
+
+  // Derived sets for data quality analysis
+  matterNumbersInWip: Set<string>;            // all matterNumbers referenced in time entries
+  matterNumbersInMatters: Set<string>;        // all matterNumbers in the matters export
+  matterNumbersInInvoices: Set<string>;       // all matterNumbers in invoices
+  lawyerIdsInWip: Set<string>;               // all lawyerIds referenced in time entries
+  lawyerIdsInFeeEarners: Set<string>;        // all lawyerIds in fee earner file
 }

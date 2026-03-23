@@ -650,8 +650,19 @@ describe('buildCrossRefQualityStats', () => {
 });
 
 describe('buildKnownGaps', () => {
+  const baseStats = {
+    feeEarnerMappingCoverage: 90,
+    conflicts: [],
+    unresolvedMatterIds: 0,
+    unresolvedMatterNumbers: 0,
+    unresolvedLawyerNames: [],
+    wipOrphanCount: 0,
+    wipTotalCount: 0,
+    wipOrphanRate: 0,
+  };
+
   it('emits LOW_IDENTIFIER_COVERAGE gap when matterMappingCoverage < 70', () => {
-    const gaps = buildKnownGaps({ matterMappingCoverage: 45, feeEarnerMappingCoverage: 80, conflicts: [], unresolvedMatterIds: 3, unresolvedMatterNumbers: 2, unresolvedLawyerNames: [] });
+    const gaps = buildKnownGaps({ ...baseStats, matterMappingCoverage: 45, unresolvedMatterIds: 3, unresolvedMatterNumbers: 2 });
     expect(gaps.some(g => g.code === 'LOW_IDENTIFIER_COVERAGE')).toBe(true);
     const gap = gaps.find(g => g.code === 'LOW_IDENTIFIER_COVERAGE')!;
     expect(gap.severity).toBe('warning');
@@ -659,7 +670,31 @@ describe('buildKnownGaps', () => {
   });
 
   it('does NOT emit LOW_IDENTIFIER_COVERAGE gap when coverage >= 70', () => {
-    const gaps = buildKnownGaps({ matterMappingCoverage: 85, feeEarnerMappingCoverage: 90, conflicts: [], unresolvedMatterIds: 0, unresolvedMatterNumbers: 0, unresolvedLawyerNames: [] });
+    const gaps = buildKnownGaps({ ...baseStats, matterMappingCoverage: 85 });
     expect(gaps.some(g => g.code === 'LOW_IDENTIFIER_COVERAGE')).toBe(false);
+  });
+
+  it('emits WIP_ORPHAN_GAP when orphan rate exceeds default threshold (20%)', () => {
+    const gaps = buildKnownGaps({ ...baseStats, matterMappingCoverage: 90, wipOrphanCount: 49, wipTotalCount: 100, wipOrphanRate: 49 });
+    expect(gaps.some(g => g.code === 'WIP_ORPHAN_GAP')).toBe(true);
+    const gap = gaps.find(g => g.code === 'WIP_ORPHAN_GAP')!;
+    expect(gap.severity).toBe('warning');
+    expect(gap.affectedCount).toBe(49);
+  });
+
+  it('does NOT emit WIP_ORPHAN_GAP when orphan rate is at or below default threshold', () => {
+    const gaps = buildKnownGaps({ ...baseStats, matterMappingCoverage: 90, wipOrphanCount: 10, wipTotalCount: 100, wipOrphanRate: 10 });
+    expect(gaps.some(g => g.code === 'WIP_ORPHAN_GAP')).toBe(false);
+  });
+
+  it('respects custom wipOrphanThreshold', () => {
+    const stats = { ...baseStats, matterMappingCoverage: 90, wipOrphanCount: 15, wipTotalCount: 100, wipOrphanRate: 15 };
+    expect(buildKnownGaps(stats, { wipOrphanThreshold: 10 }).some(g => g.code === 'WIP_ORPHAN_GAP')).toBe(true);
+    expect(buildKnownGaps(stats, { wipOrphanThreshold: 20 }).some(g => g.code === 'WIP_ORPHAN_GAP')).toBe(false);
+  });
+
+  it('does NOT emit WIP_ORPHAN_GAP when wipTotalCount is 0 (no WIP data uploaded)', () => {
+    const gaps = buildKnownGaps({ ...baseStats, matterMappingCoverage: 90 });
+    expect(gaps.some(g => g.code === 'WIP_ORPHAN_GAP')).toBe(false);
   });
 });

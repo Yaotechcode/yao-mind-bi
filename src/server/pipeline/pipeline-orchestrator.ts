@@ -149,6 +149,21 @@ export function buildCrossRefQualityStats(
     }
   }
 
+  // WIP orphan rate — WIP entries whose matterNumber doesn't appear in any matter record
+  const wipRecords = datasets['wipJson']?.records ?? [];
+  const knownMatterNumbers = new Set<string>();
+  for (const r of (datasets['fullMattersJson']?.records ?? [])) {
+    if (r.matterNumber) knownMatterNumbers.add(String(r.matterNumber));
+  }
+  for (const r of (datasets['closedMattersJson']?.records ?? [])) {
+    if (r.matterNumber) knownMatterNumbers.add(String(r.matterNumber));
+  }
+  const wipTotalCount = wipRecords.length;
+  const wipOrphanCount = wipRecords.filter(
+    r => !r.matterNumber || !knownMatterNumbers.has(String(r.matterNumber))
+  ).length;
+  const wipOrphanRate = wipTotalCount === 0 ? 0 : (wipOrphanCount / wipTotalCount) * 100;
+
   return {
     matterMappingCoverage,
     feeEarnerMappingCoverage,
@@ -156,6 +171,9 @@ export function buildCrossRefQualityStats(
     unresolvedMatterIds,
     unresolvedMatterNumbers,
     unresolvedLawyerNames: Array.from(unresolvedLawyerNamesSet),
+    wipOrphanCount,
+    wipTotalCount,
+    wipOrphanRate,
   };
 }
 
@@ -163,7 +181,11 @@ export function buildCrossRefQualityStats(
 // KnownGap
 // ---------------------------------------------------------------------------
 
-export function buildKnownGaps(stats: CrossReferenceQualityStats): KnownGap[] {
+export function buildKnownGaps(
+  stats: CrossReferenceQualityStats,
+  options?: { wipOrphanThreshold?: number }
+): KnownGap[] {
+  const wipOrphanThreshold = options?.wipOrphanThreshold ?? 20;
   const gaps: KnownGap[] = [];
 
   if (stats.matterMappingCoverage < 70) {
@@ -171,6 +193,15 @@ export function buildKnownGaps(stats: CrossReferenceQualityStats): KnownGap[] {
       code: 'LOW_IDENTIFIER_COVERAGE',
       severity: 'warning',
       message: `Matter identifier coverage is ${stats.matterMappingCoverage.toFixed(0)}% — fewer than 70% of matter records have both ID and number. Upload fullMatters or closedMatters to improve coverage.`,
+    });
+  }
+
+  if (stats.wipTotalCount > 0 && stats.wipOrphanRate > wipOrphanThreshold) {
+    gaps.push({
+      code: 'WIP_ORPHAN_GAP',
+      severity: 'warning',
+      message: `${stats.wipOrphanRate.toFixed(0)}% of WIP entries (${stats.wipOrphanCount} of ${stats.wipTotalCount}) have no matched matter. These entries are included in totals but excluded from matter-level analysis.`,
+      affectedCount: stats.wipOrphanCount,
     });
   }
 
