@@ -13,10 +13,12 @@ import {
   storeCrossReferenceRegistry,
   getCrossReferenceRegistry,
 } from '../lib/mongodb-operations.js';
+import { buildIndexes } from './indexer.js';
 import type {
   NormaliseResult,
   CrossReferenceRegistry,
   CrossReferenceQualityStats,
+  PipelineIndexes,
 } from '@shared/types/pipeline.js';
 import type { DataQualityReport, KnownGap } from '@shared/types/index.js';
 
@@ -40,6 +42,7 @@ export interface PipelineResult {
   crossReferenceRegistry: CrossReferenceRegistry;
   /** Enriched datasets after all stages have run. */
   enrichedDatasets: Record<string, NormaliseResult>;
+  indexes: PipelineIndexes;
   dataQuality: Partial<DataQualityReport>;
 }
 
@@ -49,14 +52,16 @@ export interface PipelineResult {
 
 /**
  * Run the 8-stage pipeline for a firm.
- * Stages 2 and 4–8 are pass-through stubs pending future implementation.
- * Stage 3 (Cross-Reference) is fully implemented.
+ * Stage 2 (Normalise) is handled by the caller before invoking runPipeline —
+ * normalisedDatasets already contains post-normalise records.
+ * Stage 3 (Cross-Reference) and Stage 4 (Index) are fully implemented.
+ * Stages 5–8 are pass-through stubs pending future implementation.
  */
 export async function runPipeline(input: PipelineInput): Promise<PipelineResult> {
   const { firmId, normalisedDatasets } = input;
 
   // -------------------------------------------------------------------------
-  // Stage 2: Normalise — stub (pass-through until 1B-04)
+  // Stage 2: Normalise — performed by caller; normalisedDatasets is the output
   // -------------------------------------------------------------------------
   const stageOneOutput = normalisedDatasets;
 
@@ -85,7 +90,13 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   await storeCrossReferenceRegistry(firmId, serialiseRegistry(crossReferenceRegistry));
 
   // -------------------------------------------------------------------------
-  // Stages 4–8: stubs (pass-through until implemented)
+  // Stage 4: Index — build lookup maps from cross-reference-resolved records
+  // -------------------------------------------------------------------------
+  const entityKeys = Object.keys(enrichedAfterCrossRef);
+  const indexes = buildIndexes(enrichedAfterCrossRef, entityKeys);
+
+  // -------------------------------------------------------------------------
+  // Stages 5–8: stubs (pass-through until implemented)
   // -------------------------------------------------------------------------
   const enrichedDatasets = enrichedAfterCrossRef;
 
@@ -105,6 +116,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     completedAt: new Date().toISOString(),
     crossReferenceRegistry,
     enrichedDatasets,
+    indexes,
     dataQuality,
   };
 }
