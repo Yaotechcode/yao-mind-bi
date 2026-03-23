@@ -25,7 +25,7 @@ const VALID_CATEGORIES: FormulaCategory[] = [
 ];
 
 const VALID_RESULT_TYPES: FormulaResultType[] = [
-  'percentage', 'currency', 'days', 'hours', 'score', 'ratio', 'boolean', 'count',
+  'percentage', 'currency', 'days', 'hours', 'number', 'ratio', 'boolean',
 ];
 
 const VALID_AGGREGATION_LEVELS: AggregationLevel[] = [

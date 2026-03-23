@@ -1,194 +1,396 @@
-# Yao Mind — Architecture
+# Yao Mind — Architecture & Design Decisions
 
-**BI engine for UK law firms. Phase 1.**
-
----
-
-## System Overview
-
-Yao Mind ingests law firm data exports (CSV/JSON from practice management systems), runs a 7-stage processing pipeline, executes a formula engine against enriched data, and surfaces KPIs across 6 dashboards. It is a **read-only intelligence layer** — it never writes back to the source systems.
-
-The system has a dual source-of-truth model: **Yao** (billing system) for money/invoices, **WIP** (time recording) for effort/hours. Discrepancies between the two are flagged rather than silently resolved.
+**Version 1.2 · March 2026 · Confidential**
 
 ---
 
-## Tech Stack
+## Table of Contents
 
-| Layer | Technology | Purpose |
+1. [System Overview](#1-system-overview)
+2. [Tech Stack & Rationale](#2-tech-stack--rationale)
+3. [Repository Structure](#3-repository-structure)
+4. [Data Architecture](#4-data-architecture)
+5. [Entity Model](#5-entity-model)
+6. [Configuration System](#6-configuration-system)
+7. [Formula System](#7-formula-system)
+8. [Data Pipeline](#8-data-pipeline)
+9. [Authentication & Security](#9-authentication--security)
+10. [Design & Theming](#10-design--theming)
+11. [Key Design Decisions](#11-key-design-decisions)
+12. [Future Considerations](#12-future-considerations)
+
+---
+
+## 1. System Overview
+
+Yao Mind is a Business Intelligence engine purpose-built for UK law firms. It ingests practice management data exports, runs a structured calculation pipeline, and presents KPIs across six dashboards — giving firms actionable intelligence from data they already have.
+
+**Core principle:** *From data you already have, to intelligence you have never had.*
+
+The system is designed around three user types:
+
+- **Firm owners / managing partners** — firm-level P&L, scorecard, strategic view
+- **Department heads / partners** — team performance, matter health, WIP
+- **Fee earners** — personal utilisation, billing, matter status
+
+All data is firm-isolated. No firm ever sees another firm's data.
+
+---
+
+## 2. Tech Stack & Rationale
+
+| Layer | Technology | Why |
 |---|---|---|
-| Hosting | Netlify | Static frontend + serverless functions |
-| Auth + Config DB | Supabase (PostgreSQL) | Auth, RLS, firm config, entity registry, formula registry |
-| Data DB | MongoDB Atlas | Raw uploads, enriched entities, calculated KPIs, snapshots |
-| Frontend | Lovable.dev (React) | All UI/UX — built separately from this codebase |
-| Version Control | GitHub | Always synced; all changes committed and pushed |
-| Language | TypeScript (strict) | End-to-end |
-| Validation | Zod | Runtime validation of all inputs and configs |
-| Testing | Vitest | Unit and integration tests |
+| Hosting | Netlify | Serverless, global CDN, easy deploy from GitHub |
+| Frontend | React + TypeScript + Vite (Lovable.dev) | Rapid UI development, type-safe |
+| Backend logic | Netlify Functions (TypeScript) | Serverless, co-located with frontend |
+| Structured data / Auth | Supabase (PostgreSQL + RLS) | Auth out of the box, row-level security, JSONB for config |
+| Document / raw data | MongoDB Atlas | Flexible schema for heterogeneous law firm data exports |
+| Validation | Zod | Runtime + compile-time validation, shared client/server |
+| Date handling | date-fns | Lightweight, tree-shakeable |
+| Testing | Vitest | Fast, TypeScript-native |
+| Version control | GitHub | Source of truth, two-repo strategy (see §11) |
+
+**Two-repo strategy:**
+- `yao-mind` (Claude Code) — backend, data pipeline, formula engine, Netlify Functions, shared types
+- `yao-mind-ui` (Lovable.dev) — React components, pages, layouts, dashboard UI
+
+The repos share environment variables and API endpoint contracts. UI calls backend via Netlify Function URLs. Merge UI into main repo at end of each phase.
 
 ---
 
-## Repository Structure
+## 3. Repository Structure
 
 ```
 /src
-  /shared/          # Shared between client and server — types, constants, entities, formulas
-    /types/         # Core TypeScript interfaces and enums (index.ts, mongodb.ts)
-    /entities/      # Entity registry definitions (registry.ts, defaults.ts)
-    /formulas/      # Formula and snippet definitions (built-in-formulas.ts, built-in-snippets.ts)
-    /validation/    # Zod schemas (config-validators.ts, custom-field-validators.ts)
-    /constants/     # Defaults and lookup tables (defaults.ts)
-  /client/          # Client-side only code
-    /parsers/       # File parsers (CSV, JSON) — run in browser for instant preview
-  /server/          # Server-side only code
-    /functions/     # Netlify Functions (one file per endpoint)
-    /services/      # Business logic services
-    /lib/           # Infrastructure clients (supabase.ts, mongodb.ts, auth-middleware.ts)
-/scripts/           # One-time setup scripts (migrations, seeding)
-/tests/             # Mirror of /src structure
-/netlify/           # Netlify config
+  /shared         — types, interfaces, constants, validators (used by client + server)
+    /types        — TypeScript interfaces + enums
+    /entities     — entity registry definitions
+    /formulas     — formula + snippet definitions
+    /validation   — Zod schemas
+  /client         — client-side code (parsers, state, utilities)
+  /server         — server-side code
+    /functions    — individual Netlify Functions (one file = one endpoint)
+    /services     — business logic services (called by functions)
+    /lib          — shared server utilities (Supabase client, MongoDB client, auth middleware)
+/scripts          — database seeding, migrations, setup utilities
+/tests            — mirrors /src structure
+/netlify          — Netlify configuration
 ```
 
 ---
 
-## Data Architecture
+## 4. Data Architecture
 
-### Two Databases, Two Roles
+### Dual Database Strategy
 
-**Supabase (PostgreSQL)** — structured, relational, enforced by RLS:
-- `firms` — one row per law firm
-- `users` — extends Supabase auth, includes `firm_id` and `role`
-- `firm_config` — all three configuration tiers as JSONB
-- `entity_registry` — field/relationship schemas for all 9 built-in + custom entities
-- `custom_fields` — user-defined fields per entity type
-- `formula_registry` — formula definitions with variants and modifiers
-- `fee_earner_overrides` — per-lawyer config overrides
-- `column_mapping_templates` — saved CSV column mapping templates
-- `audit_log` — immutable change history
+**Supabase (PostgreSQL)** owns:
+- User accounts and authentication
+- Firm profiles and configuration (all three tiers)
+- Entity registry (schema definitions)
+- Formula registry (formula definitions)
+- Custom fields definitions
+- Column mapping templates
+- Fee earner overrides
+- Audit log
 
-**MongoDB Atlas** — document store for bulk/variable data:
-- `raw_uploads` — original file content as stored
-- `enriched_entities` — processed and joined records per entity type
-- `calculated_kpis` — formula output snapshots
-- `historical_snapshots` — periodic firm summaries for trending
-- `custom_entity_records` — records for user-created entity types
+**MongoDB Atlas** owns:
+- Raw uploaded files (pre-processing)
+- Enriched entity records (post-pipeline)
+- Calculated KPIs (post-formula-engine)
+- Historical snapshots
+- Custom entity records (manually entered)
+- Cross-reference registries (identifier mapping dictionaries, one per firm, extended on each upload)
 
-### Firm Isolation
+### Rationale for Split
 
-Supabase: Row Level Security enforces `firm_id` on every table. A helper function `get_user_firm_id()` extracts the calling user's firm from `auth.uid()`.
+Supabase handles structured, relational, security-critical data where row-level security and relational integrity matter. MongoDB handles the heterogeneous, variable-schema data that comes from law firm practice management exports — where the shape varies by firm and no two exports are identical.
 
-MongoDB: No native RLS — firm isolation is enforced at the application layer. Every MongoDB query function takes `firmId` as a required first parameter and includes it in every query. This is non-negotiable.
+### Dual Source of Truth
+
+A deliberate architectural decision: **Yao (billing system) and WIP (time recording) are treated as separate sources of truth.** Discrepancies between them are flagged, not silently resolved. This reflects real law firm operations where these systems are often out of sync, and surfacing the gap is itself valuable intelligence.
+
+### Data Flow
+
+```
+CSV/JSON Upload
+  → Client-side parse (instant preview)
+  → Raw storage (MongoDB)
+  → Server pipeline: Normalise → Cross-Reference → Index → Join → Enrich → Aggregate → Calculate
+  → Enriched entities (MongoDB)
+  → KPI calculation (Formula Engine)
+  → Calculated KPIs (MongoDB)
+  → Dashboard queries (Netlify Functions)
+  → UI
+```
 
 ---
 
-## Entity Model
+## 5. Entity Model
 
-9 built-in entity types. All are extensible with custom fields.
+Nine built-in entity types, all extensible:
 
-| Entity | Key | Data Source |
+| Entity | Source | Key Role |
 |---|---|---|
-| Fee Earner | `feeEarner` | Fee Earner CSV export |
-| Matter | `matter` | Full Matters JSON |
-| Time Entry | `timeEntry` | WIP JSON |
-| Invoice | `invoice` | Invoices JSON |
-| Client | `client` | Contacts JSON |
-| Disbursement | `disbursement` | Disbursements JSON |
-| Department | `department` | Derived from matter.department |
-| Task | `task` | Tasks JSON |
-| Firm | `firm` | Aggregated singleton |
+| Fee Earner | CSV upload | Central to all profitability + utilisation |
+| Matter | Full Matters JSON | Revenue unit, joins to most other entities |
+| Time Entry | WIP JSON | Raw effort data, source of utilisation |
+| Invoice | Invoices JSON | Billing + debtor analysis |
+| Client | Contacts JSON | Aggregation target for client intelligence |
+| Disbursement | Disbursements JSON | Expense tracking, recovery analysis |
+| Department | Derived from Matter | Organisational grouping |
+| Task | Tasks JSON | Matter workload and overdue tracking |
+| Firm | Aggregated | Singleton, firm-level rollup |
 
-Entities are defined in `src/shared/entities/registry.ts`. Each definition includes all fields with type metadata, relationships (hasMany/belongsTo with join keys), and extensible fields that unlock features when populated (e.g. `activityType` on TimeEntry enables non-chargeable breakdown).
+All entities support custom fields (added by the firm). All entities support custom relationships. New entity types can be created (derived, manual, or uploaded).
+
+### Extensible Fields
+
+Several built-in fields are defined but not always present in data exports. These are tracked with a `missingBehaviour` property:
+
+- `exclude_from_analysis` — data exists in some firms, analysis adapts when present
+- `hide_column` — purely additive display field
+- `use_default` — falls back to a configured default
+
+Key extensible fields and what they unlock:
+
+| Field | Entity | Unlocks |
+|---|---|---|
+| `activityType` | Time Entry | Non-chargeable breakdown, activity analysis |
+| `datePaid` | Invoice | Exact debtor days, payment behaviour, slow payer ranking |
+| `description` | Time Entry | Matter detail view, AI context builder |
+| `description` | Disbursement | Disbursement categorisation |
 
 ---
 
-## Data Pipeline (7 Stages)
+## 6. Configuration System
+
+Three-tier configuration, all stored per-firm in Supabase:
+
+**Tier 1 — Firm Profile** (set once at onboarding)
+Working time defaults, pay model defaults, revenue attribution method, FTE counting method, cost rate method.
+
+**Tier 2 — Formula Configuration** (updated periodically)
+Per-formula variant selection, user modifiers, snippet composition, fee earner overrides, overhead allocation method.
+
+**Tier 3 — RAG Thresholds** (adjusted frequently)
+Per-metric green/amber/red boundaries, with per-grade overrides (e.g., partner thresholds differ from paralegal thresholds).
+
+All config changes are logged in the audit trail with old value, new value, timestamp, and user. Config can be exported as JSON and imported to another firm (built-in entities and formulas are never overwritten on import). Rollback to any previous config state is supported.
+
+---
+
+## 7. Formula System
+
+### Architecture
+
+Formulas are **pure data definitions**: `f(data, config) → result`. They are not executable code stored in the database. The Formula Engine (built in Phase 1C) reads definitions and executes them. This separation enables:
+
+- Safe export/import of custom formulas between firms
+- Formula versioning without code deployment
+- AI-assisted formula translation and validation
+- Sandbox execution before production deployment
+
+### Formula Registry
+
+28 entries at launch: 23 built-in formulas + 5 built-in snippets. All have:
+- Unique formula ID (e.g., `F-TU-01`, `SN-002`)
+- Structured definition descriptor (not executable code)
+- Variant definitions (different calculation approaches)
+- Dependency declarations (which snippets/config values are needed)
+- Display configuration (default dashboard placement)
+
+### Formula Layers (bottom to top)
 
 ```
-Parse → Normalise → Index → Join → Enrich → Aggregate → Calculate
+Raw Data Fields
+  → Snippets (reusable calculation fragments: SN-001 to SN-005)
+  → Built-in Formulas (F-TU-01 through F-CS-03)
+  → User Modifiers (firm-specific adjustments layered on top)
+  → Variants (alternative approaches, firm selects one as active)
+  → Custom Formulas (firm-created, can compose snippets)
+  → RAG Thresholds (applied to any numeric result)
+  → Composite Scores (weighted combinations: F-CS-01 to F-CS-03)
 ```
 
-**Parse** — client-side for instant preview, server-side for persistence  
-**Normalise** — standardise field names, coerce types, apply column mapping templates  
-**Index** — build lookup maps (lawyerId → feeEarner, matterId → matter) for O(1) joins  
-**Join** — resolve relationships across entities (e.g. timeEntry.lawyerId → feeEarner)  
-**Enrich** — compute derived fields (durationHours, isChargeable, ageInDays, etc.)  
-**Aggregate** — roll up to matter/feeEarner/department/firm level  
-**Calculate** — run formula engine, produce KPIs, apply RAG status
+### Formula Readiness States
 
-Critical known data gap: ~49% of WIP entries are orphaned from matters (Full Matters export needs expanding). The pipeline flags these rather than silently discarding them.
+Every formula is evaluated for readiness before execution:
 
----
+| State | Meaning |
+|---|---|
+| 🟢 Ready | All required data present, full accuracy |
+| 🟡 Partial | Running with fallbacks/assumptions, results are estimates |
+| 🔴 Blocked | Required data source missing, cannot run |
+| 💡 Enhanced | Optional extensible field present, richer variant auto-activated |
 
-## Formula Engine
+Readiness state is displayed on KPI cards and the formula library. Users always know the confidence level of a number.
 
-Formulas are **pure functions**: `f(data, config) → result`. They never mutate state.
+### Formula Versioning
 
-**23 built-in formulas** across 7 domains:
-- Utilisation & Time: F-TU-01 to F-TU-03
-- Revenue & Billing: F-RB-01 to F-RB-04
-- WIP & Leakage: F-WL-01 to F-WL-04
-- Profitability: F-PR-01 to F-PR-05
-- Budget & Scope: F-BS-01 to F-BS-02
-- Debtors: F-DM-01
-- Composites: F-CS-01 to F-CS-03
+Every formula change creates a new version. Historical KPI snapshots reference the formula version that produced them. This means:
+- Results from different time periods are comparable even if formulas changed
+- Partners cannot accidentally rewrite history by modifying a formula
+- Audit trail records not just what changed but what numbers were produced under each version
 
-**5 built-in snippets** (SN-001 to SN-005) — reusable sub-calculations (cost rates, available hours, firm-retain logic).
+### AI-Assisted Formula Tools
 
-Each formula supports variants, user modifiers, and dependency resolution. Fee share vs salaried is a first-class concept that affects every profitability formula. All formulas handle null gracefully and adapt to progressive data availability.
+**Plain-English Translation:** When a user defines or modifies a formula, Claude translates the definition back into plain English for confirmation before saving. Example:
 
----
+> *"This formula will calculate total billed value for each fee earner on active matters, divided by their available hours this month, expressed as a percentage. It will return null for fee earners with no time entries in the period."*
 
-## Configuration System (3 Tiers)
+**Dependency Impact Analysis:** When a config value is changed, the system identifies which formulas will be affected and shows the user before applying the change.
 
-**Tier 1 — Firm Profile** (set once during onboarding): working time defaults, pay model defaults, revenue attribution method, FTE counting method.
+**Formula Validation:** Before saving, Claude checks that all referenced fields exist on the declared entity, all joins are defined in the entity registry, and the result type is consistent with the formula logic.
 
-**Tier 2 — Formula Config** (periodic): cost rate methods, fee share percentages, overhead allocation, scorecard weights.
+### Sandbox / Preview Mode
 
-**Tier 3 — RAG Thresholds** (frequent): per-metric green/amber/red boundaries with per-grade overrides (e.g. different utilisation thresholds for Partners vs Paralegals).
+Before any custom formula is activated, users can run it against a sample of real data (configurable: last 30 days, one department, all data). Preview shows:
+- Raw results for a sample of records
+- Null rate and reasons for nulls
+- Distribution (min, median, max)
+- Any records that produced unexpected result types
 
-Config is stored in Supabase `firm_config` as JSONB. All changes are logged to `audit_log` with old/new values. Full export/import (JSON) with backup-before-import and rollback support.
+### Dependency Graph
 
----
+A visual showing the full dependency chain of any formula: which snippets it uses, which config values affect it, which data fields feed it. When a config value changes, the graph highlights all affected formulas. Built as a UI component in Lovable (Phase 1E).
 
-## Authentication & Security
+### Formula Templates
 
-- Supabase Auth handles all identity (JWT)
-- All Netlify Functions use `auth-middleware.ts` — extracts Bearer token, verifies with Supabase, resolves `firm_id` and `role`
-- Role hierarchy: `owner > admin > partner > department_head > fee_earner > viewer`
-- Data mutations require `owner` or `admin` role
-- Config deletion requires `owner` or `admin` role
-- Audit log is append-only (no UPDATE or DELETE policy)
+Above snippets, a library of complete formula starting points for common law firm patterns:
+- Matter profitability (fixed fee vs time & charge)
+- Fee earner ROI (salaried vs fee share)
+- Department margin
+- Client lifetime value
+- WIP recovery probability by age band
 
----
+Templates are cloneable and editable. Wizard creates from scratch; template clones a proven pattern.
 
-## API Layer (Netlify Functions)
+### Custom Formula Wizard (5-step flow)
 
-All endpoints follow the pattern: authenticate → extract firm_id → call service → return typed response.
-
-HTTP conventions: 200 success, 400 bad request, 401 unauthenticated, 403 forbidden, 500 server error. Error bodies always include a message field.
-
-Key endpoint groups:
-- `/api/config-*` — firm configuration CRUD
-- `/api/upload` — file upload and pipeline trigger
-- `/api/data/*` — enriched entity retrieval
-- `/api/calculate` — formula execution
-- `/api/audit-log` — audit history and rollback
+1. **What are you measuring?** — select entity type and result type
+2. **What data does it use?** — pick fields and snippets
+3. **How is it calculated?** — define the logic using the visual builder
+4. **When should it run?** — set data requirements and null handling
+5. **Review & confirm** — AI plain-English translation, preview against sample data
 
 ---
 
-## 6 Dashboards (Phase 1E)
+## 8. Data Pipeline
 
-Firm Overview · Fee Earner Performance · WIP · Billing & Collections · Matter Analysis · Client Intelligence
+Eight stages, split between client-side (instant preview) and server-side (full persistence):
 
-Dashboards adapt to what data has been loaded (progressive availability). All dashboards show both gross and firm-net views, and both firm and lawyer perspectives for fee share earners.
+| Stage | Where | What |
+|---|---|---|
+| 1. Parse | Client | CSV/JSON → typed records, instant column preview |
+| 2. Normalise | Server | Standardise field names, coerce types, apply column mapping |
+| 3. Cross-Reference | Server | Build identifier mapping dictionaries from rows that contain both forms (matterId ↔ matterNumber, lawyerId ↔ lawyerName, contactId ↔ displayName, departmentId ↔ name). Apply maps across all records to fill missing identifier forms. Persist registry to MongoDB. |
+| 4. Index | Server | Build lookup maps from fully-resolved records. Both identifier forms now present on most records. |
+| 5. Join | Server | Link time entries → matters → fee earners → clients using the complete indexes |
+| 6. Enrich | Server | Calculate derived fields, resolve names from IDs, apply custom fields |
+| 7. Aggregate | Server | Roll up to matter/fee earner/department/firm level |
+| 8. Calculate | Server | Run formula engine against enriched aggregates |
+
+### Why Cross-Reference is a Dedicated Stage
+
+Different Metabase exports use different identifier types for the same entities — some use internal UUIDs, others use human-readable numbers or name strings. A time entry references a matter by `matterId` (UUID); an invoice references the same matter by `matterNumber` (integer). Without resolving these before building indexes, join success rates are significantly reduced.
+
+The Cross-Reference engine scans every uploaded dataset for rows that contain both forms of an identifier simultaneously. Each such row is a mapping opportunity. The resulting `CrossReferenceRegistry` is:
+- Built from the dataset with the highest confidence first (Full Matters > Closed Matters > WIP > Invoices > Disbursements > Tasks)
+- Applied back to all records to fill in the missing form
+- Persisted to MongoDB and extended (not replaced) on each subsequent upload
+- Surfaced in the DataQualityReport with coverage statistics
+
+Identifier pairs resolved: `matterId` ↔ `matterNumber`, `lawyerId` ↔ `lawyerName` (including name variants and abbreviations), `contactId` ↔ `displayName`, `departmentId` ↔ department name.
+
+### Data Quality
+
+The pipeline produces a `DataQualityReport` alongside enriched data:
+- Orphaned records (e.g., time entries with no matching matter)
+- Missing required fields
+- Unresolved joins (ID present but no matching record)
+- Extensible field coverage (what % of records have `activityType`, `datePaid`, etc.)
+- Discrepancies between Yao billing totals and WIP totals
+- **Cross-reference coverage** — what % of records had both identifier forms, how many were resolved via the registry, any conflicts between datasets
+
+Data quality issues are surfaced in the UI, not silently swallowed.
+
+### Progressive Data Availability
+
+Dashboards adapt to what data is loaded. A firm that has only uploaded fee earner data and WIP will see utilisation dashboards fully populated and billing dashboards in a "data needed" state. No empty dashboards — every loaded data source unlocks something.
 
 ---
 
-## Development Principles
+## 9. Authentication & Security
 
-- **Work in order.** Prompts 1A-01 through 1A-09 must be completed and verified before moving to 1B.
-- **Test before proceeding.** Each prompt has explicit verification steps — do not skip.
-- **Small, focused increments.** One concern per commit.
-- **Always push to GitHub.** Every session ends with a commit and push.
-- **firm_id on every query.** Non-negotiable data isolation pattern.
-- **Null-safe formulas.** All formula implementations must handle missing data gracefully.
-- **No colours.** Theming is provided separately — never suggest or hardcode colour values.
+- Supabase Auth handles all authentication (email/password, magic link)
+- JWT tokens verified on every Netlify Function request via `auth-middleware.ts`
+- Row Level Security on all Supabase tables — enforced at database level, not just application level
+- MongoDB firm isolation enforced at application layer (every query includes `firm_id`)
+- User roles: `owner`, `admin`, `partner`, `department_head`, `fee_earner`, `viewer`
+- Audit log is immutable (no UPDATE or DELETE on audit_log table)
+- Config export does not include user accounts, raw data, or calculated KPIs
+
+---
+
+## 10. Design & Theming
+
+All colours, typography, spacing, and component styling are defined in `/ThemeGuide.md`.
+
+**Claude Code:** Do not generate UI styles, suggest colour values, or make component design decisions. All UI is built in Lovable.dev following ThemeGuide.md.
+
+**Lovable.dev:** Follow ThemeGuide.md for all visual decisions. When generating components, reference the theme guide before applying any styling.
+
+**When generating backend code that touches UI contracts** (e.g., API response shapes that feed dashboard components), add a comment referencing the relevant dashboard section in the Architecture doc so Lovable has context for how the data will be displayed.
+
+---
+
+## 11. Key Design Decisions
+
+### Formulas are pure data, not code
+Formula definitions are structured descriptor objects, not executable JavaScript. The Formula Engine is separate from the definitions. This enables safe sharing, versioning, import/export, and AI translation. Never store executable code in the formula registry.
+
+### Dual source of truth (Yao vs WIP)
+Billing totals (Yao) and time recording totals (WIP) are kept separate and discrepancies surfaced, not resolved. This is intentional — the gap is itself a KPI.
+
+### Cross-reference before index
+Different Metabase exports use different identifier types for the same entities. The pipeline resolves this with a dedicated Cross-Reference stage (Stage 3) that builds identifier mapping dictionaries from any row that contains both forms simultaneously, then applies those dictionaries to all records before indexes are built. The resulting `CrossReferenceRegistry` persists to MongoDB and is extended on each new upload — so uploading a second file type retrospectively improves the resolution of data already in the system.
+
+### Fee share vs salaried as first-class concept
+Every profitability formula branches on pay model. This is not a modifier or edge case — it is a fundamental axis of the calculation. Fee share lawyers have no employment cost to the firm; salaried lawyers do. All formulas handle both.
+
+### Revenue attribution is configurable
+Who "owns" a matter's revenue (responsible lawyer, supervisor, originator, or split) is a firm-level config choice, not a hardcoded assumption. Formulas consume the attribution model from config.
+
+### Show both gross and firm-net views
+For fee share lawyers, dashboards show both the gross revenue (before fee share split) and the firm-net revenue (after). Both are meaningful; neither replaces the other.
+
+### Progressive data availability
+The system never blocks on missing data. Every loaded data source unlocks something. Dashboards show their readiness state and degrade gracefully when optional data is absent.
+
+### Config changes are always audited and reversible
+No configuration change is permanent without an audit trail. Every change logs old value, new value, user, and timestamp. Rollback is always available. Formula versioning means historical results are never corrupted by current changes.
+
+### Two-repo strategy
+Claude Code (backend) and Lovable.dev (frontend) operate in separate GitHub repositories to prevent tool conflicts. The backend repo is the source of truth for API contracts and shared types. Merge UI into backend repo at the end of each phase.
+
+---
+
+## 12. Future Considerations
+
+These are not Phase 1 deliverables but the architecture is designed to accommodate them:
+
+**Formula Marketplace:** Because formulas are pure data definitions, they can be exported, anonymised, and shared between firms. The registry structure supports this without architectural changes.
+
+**AI Context Builder:** When `description` fields are populated on time entries, Claude can generate matter summaries, identify billing patterns, and flag anomalies. The extensible field design enables this when data is available.
+
+**Scheduled Snapshots:** The `historical_snapshots` MongoDB collection is designed to support automated weekly/monthly KPI snapshots once a scheduling mechanism is added (Netlify scheduled functions or external cron).
+
+**Multi-currency:** The currency field on `firms` table is present. Formula engine execution context carries currency — conversion logic can be added without schema changes.
+
+**API Access for Firms:** The Netlify Function architecture is already a REST API. Authenticated API keys per firm (separate from user auth) would enable direct integration with practice management systems, eliminating the CSV export step.
+
+---
+
+*Yao Mind — From data you already have, to intelligence you have never had.*
+*Built with Claude Code · Powered by Anthropic · For UK Law Firms*

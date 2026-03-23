@@ -1,6 +1,6 @@
 # Yao Mind — CLAUDE.md
 
-BI engine for UK law firms. Ingests practice management exports → runs a 7-stage pipeline → formula engine → 6 dashboards.
+BI engine for UK law firms. Ingests practice management exports → runs an 8-stage pipeline → formula engine → 6 dashboards.
 
 See full system design in `ARCHITECTURE.md`.
 
@@ -76,6 +76,14 @@ After every change: run `tsc --noEmit` and the relevant test file. Fix all error
 
 **Entity registry** — when creating/updating custom fields, always update both `custom_fields` table AND the relevant entity's `fields` array in `entity_registry`. These must stay in sync.
 
+**Cross-reference registry** — the `CrossReferenceRegistry` in MongoDB maps between identifier forms (matterId ↔ matterNumber, lawyerId ↔ lawyerName, contactId ↔ displayName, departmentId ↔ name). It is built in pipeline Stage 3, persisted to MongoDB (`cross_reference_registries` collection), and extended (not replaced) on each new upload. When debugging join failures, check the registry coverage stats in the DataQualityReport first.
+
+**Pipeline stage order** — Parse → Normalise → Cross-Reference → Index → Join → Enrich → Aggregate → Calculate. Cross-Reference (Stage 3) must run before Index (Stage 4). Never build indexes from un-resolved records.
+
+**Formula readiness** — every formula result carries a `FormulaReadinessResult` (READY / PARTIAL / BLOCKED / ENHANCED). BLOCKED formulas must not execute. All KPI API responses include readiness metadata. The UI uses this to render confidence indicators.
+
+**Formula versioning** — every formula definition change creates a new version in `formula_versions` table. Calculated KPI documents reference the `formulaVersionSnapshot` used to produce them. Never mutate a formula definition in place — always version it.
+
 ---
 
 ## Data Model Essentials
@@ -87,6 +95,8 @@ After every change: run `tsc --noEmit` and the relevant test file. Fix all error
 **Extensible fields**: some entity fields are defined but not yet populated (e.g. `activityType` on TimeEntry, `datePaid` on Invoice). These have `missingBehaviour` and `enablesFeatures` metadata. Dashboards must adapt gracefully when these are absent.
 
 **WIP orphan gap**: ~49% of WIP entries lack a matched matter. The pipeline flags these as `hasMatchedMatter: false`. Never drop them silently.
+
+**Mixed identifier types**: different exports use different identifier forms for the same entity. WIP uses `matterId` (UUID); invoices use `matterNumber` (integer). Fee earner CSV uses names where WIP uses `lawyerId`. The Cross-Reference engine (Stage 3) resolves this by building mapping dictionaries from rows that contain both forms, then applying them across all datasets. Never assume two datasets use the same identifier form for the same entity.
 
 ---
 
@@ -108,3 +118,7 @@ All config lives in Supabase `firm_config` as JSONB. Use `getFirmConfig()` / `up
 - MongoDB isolation → check that every query includes `firm_id` in the filter
 - Formula returns wrong value → check `payModel` branching and null handling first
 - Config not persisting → check audit_log; if no entry, the write didn't go through config service
+- Join failure (matter not found) → check `CrossReferenceRegistry` coverage stats in DataQualityReport; the record may have only one identifier form and the registry may not yet have the mapping (upload the file type that contains both forms)
+- Identifier conflict in cross-reference → check `CrossReferenceConflict[]` in the registry stats; a conflict means two datasets disagree on the mapping — priority order is fullMatters > closedMatters > wip > invoice > disbursements > tasks
+- Formula readiness BLOCKED unexpectedly → check `DataAvailabilitySummary.loadedDataSources` against the formula's declared data requirements; the required file type may not have been uploaded yet
+- Formula version mismatch → KPI results reference a `formulaVersionSnapshot`; if numbers change unexpectedly after a formula edit, compare the snapshot definition against the current formula registry

@@ -977,7 +977,7 @@ const BUILT_IN_FORMULAS: BuiltInFormulaDefinition[] = [
     category: 'budget',
     formulaType: 'built_in',
     entityType: EntityType.MATTER,
-    resultType: 'score',
+    resultType: 'number',
     definition: {
       approach:
         'Scope creep score is derived from two inputs: ' +
@@ -1082,7 +1082,7 @@ const BUILT_IN_FORMULAS: BuiltInFormulaDefinition[] = [
     category: 'debtors',
     formulaType: 'built_in',
     entityType: EntityType.CLIENT,
-    resultType: 'score',
+    resultType: 'number',
     definition: {
       approach:
         'Three inputs: average days to pay (historical), proportion of invoices paid late, ' +
@@ -1187,7 +1187,7 @@ const BUILT_IN_FORMULAS: BuiltInFormulaDefinition[] = [
     category: 'composite',
     formulaType: 'built_in',
     entityType: EntityType.FEE_EARNER,
-    resultType: 'score',
+    resultType: 'number',
     definition: {
       approach:
         'Score each of the four component formulas (F-TU-01, F-RB-01, F-TU-02, F-WL-02) ' +
@@ -1236,7 +1236,7 @@ const BUILT_IN_FORMULAS: BuiltInFormulaDefinition[] = [
     category: 'composite',
     formulaType: 'built_in',
     entityType: EntityType.MATTER,
-    resultType: 'score',
+    resultType: 'number',
     definition: {
       approach:
         'Score each of the four components (F-WL-01, F-BS-01, F-RB-01, F-WL-03) ' +

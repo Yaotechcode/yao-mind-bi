@@ -34,10 +34,9 @@ export type FormulaResultType =
   | 'currency'     // monetary value (£)
   | 'days'         // duration in calendar/working days
   | 'hours'        // duration in hours
-  | 'score'        // composite score (e.g. 0–100)
+  | 'number'       // generic numeric value (counts, scores, indices)
   | 'ratio'        // unitless ratio
-  | 'boolean'      // true/false flag
-  | 'count';       // integer count
+  | 'boolean';     // true/false flag
 
 // =============================================================================
 // Definition object — plain-English descriptor, NOT executable

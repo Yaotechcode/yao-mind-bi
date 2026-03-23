@@ -1,75 +1,77 @@
 /**
  * seed-formulas.ts
  *
- * Seeds the formula_registry collection with all built-in formula and snippet definitions.
- * Safe to re-run — uses upsert on formulaId / snippetId.
+ * Seeds the formula_registry Supabase table with all built-in formula and
+ * snippet definitions. Safe to re-run — upserts on (firm_id, formula_id).
  */
 
-import { getCollection } from '../server/lib/mongodb.js';
+import { getServerClient } from '../server/lib/supabase.js';
 import { getBuiltInFormulaDefinitions } from '../shared/formulas/built-in-formulas.js';
 import { getBuiltInSnippetDefinitions } from '../shared/formulas/built-in-snippets.js';
 
-// =============================================================================
-// Types stored in MongoDB
-// =============================================================================
-
-interface StoredFormula {
-  firmId: string | null;   // null = built-in (available to all firms)
-  formulaId: string;
-  formulaType: 'built_in';
-  [key: string]: unknown;
-}
-
-interface StoredSnippet {
-  firmId: string | null;
-  snippetId: string;
-  snippetType: 'built_in';
-  [key: string]: unknown;
-}
-
-// =============================================================================
-// Seed function
-// =============================================================================
-
 /**
- * Seeds built-in formulas and snippets into the formula_registry collection.
+ * Seeds built-in formulas and snippets into the formula_registry table.
  * Pass `firmId` to seed for a specific firm, or leave undefined to seed
  * the global built-in definitions (firmId = null).
  */
 export async function seedFormulas(firmId: string | null = null): Promise<void> {
-  const collection = await getCollection('formula_registry');
+  const db = getServerClient();
+  const now = new Date().toISOString();
 
   const formulas = getBuiltInFormulaDefinitions();
   const snippets = getBuiltInSnippetDefinitions();
 
-  // Upsert all formula definitions
-  for (const formula of formulas) {
-    const doc: StoredFormula = {
-      ...formula,
-      firmId,
-      formulaType: 'built_in',
-    };
+  // Map formula definitions to table columns
+  const formulaRows = formulas.map((f) => ({
+    firm_id: firmId,
+    formula_id: f.formulaId,
+    name: f.name,
+    description: f.description,
+    category: f.category,
+    formula_type: f.formulaType,
+    entity_type: f.entityType,
+    result_type: f.resultType,
+    definition: f.definition,
+    active_variant: f.activeVariant,
+    variants: f.variants,
+    modifiers: f.modifiers,
+    depends_on: f.dependsOn,
+    display_config: f.displayConfig,
+    is_active: true,
+    created_at: now,
+    updated_at: now,
+  }));
 
-    await collection.updateOne(
-      { formulaId: formula.formulaId, firmId },
-      { $set: doc },
-      { upsert: true },
-    );
-  }
+  // Map snippet definitions to table columns (formula_type = 'snippet')
+  // BuiltInSnippetDefinition has no category field — default to 'snippet'.
+  const snippetRows = snippets.map((s) => ({
+    firm_id: firmId,
+    formula_id: s.snippetId,
+    name: s.name,
+    description: s.description,
+    category: 'snippet',
+    formula_type: 'snippet' as const,
+    entity_type: s.entityType,
+    result_type: s.resultType,
+    definition: s.definition,
+    active_variant: null,
+    variants: null,
+    modifiers: [],
+    depends_on: s.dependsOn,
+    display_config: {},
+    is_active: true,
+    created_at: now,
+    updated_at: now,
+  }));
 
-  // Upsert all snippet definitions
-  for (const snippet of snippets) {
-    const doc: StoredSnippet = {
-      ...snippet,
-      firmId,
-      snippetType: 'built_in',
-    };
+  const allRows = [...formulaRows, ...snippetRows];
 
-    await collection.updateOne(
-      { snippetId: snippet.snippetId, firmId },
-      { $set: doc },
-      { upsert: true },
-    );
+  const { error } = await db
+    .from('formula_registry')
+    .upsert(allRows, { onConflict: 'firm_id,formula_id' });
+
+  if (error) {
+    throw new Error(`formula_registry seed failed: ${error.message}`);
   }
 
   console.log(
