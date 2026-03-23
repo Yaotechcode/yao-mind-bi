@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { CrossReferenceQualityStats } from './pipeline.js';
 
 // =============================================================================
 // Enums
@@ -343,6 +344,15 @@ export interface DataQualityIssue {
   detail?: string;
 }
 
+export type KnownGapCode = 'WIP_ORPHAN_GAP' | 'LOW_IDENTIFIER_COVERAGE';
+
+export interface KnownGap {
+  code: KnownGapCode;
+  message: string;
+  severity: 'warning' | 'info';
+  affectedCount?: number;
+}
+
 export interface DataQualityReport {
   firmId: string;
   generatedAt: Date;
@@ -351,6 +361,9 @@ export interface DataQualityReport {
   issues: DataQualityIssue[];
   /** Percentage of entities with no issues */
   qualityScore: number;
+  // Added by Stage 3:
+  crossReference?: CrossReferenceQualityStats;
+  knownGaps?: KnownGap[];
 }
 
 // =============================================================================

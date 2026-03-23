@@ -1,4 +1,5 @@
 import type { ObjectId } from 'mongodb';
+import type { CrossReferenceRegistrySerialised } from './pipeline.js';
 
 // =============================================================================
 // MongoDB Document Interfaces
@@ -73,5 +74,15 @@ export interface CustomEntityRecordDocument {
   firm_id: string;
   entity_type: string;
   records: Record<string, unknown>[];
+  updated_at: Date;
+}
+
+// cross_reference_registries — one document per firm, upserted on every pipeline run
+export interface CrossReferenceRegistryDocument {
+  _id?: ObjectId;
+  firm_id: string;
+  /** Full serialised registry — Maps converted to plain objects for JSON storage */
+  data: CrossReferenceRegistrySerialised;
+  /** Always reflects last write time (upsert semantics) */
   updated_at: Date;
 }
