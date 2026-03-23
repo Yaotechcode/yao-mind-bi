@@ -106,15 +106,17 @@ export interface CrossReferenceStats {
     totalMappings: number;
     certainMappings: number;
     nameVariantsResolved: number;
-    unresolvedNames: string[];
+    unresolvedLawyerNames: string[];
   };
   clients: {
     totalMappings: number;
     certainMappings: number;
+    inferredMappings: number;
   };
   departments: {
     totalMappings: number;
     certainMappings: number;
+    inferredMappings: number;
   };
 }
 
