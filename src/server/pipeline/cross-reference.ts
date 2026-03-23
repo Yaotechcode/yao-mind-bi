@@ -286,7 +286,10 @@ function extractMatterMappings(
         registry.matters.sourceDatasets.set(matterId, [datasetName]);
       } else if (existingNumber !== matterNumber) {
         const sources = registry.matters.sourceDatasets.get(matterId) ?? [];
-        const sourceA = sources[0] ?? 'unknown';
+        // On a merge run, sources[0] may be from a prior upload session and may
+        // not reflect the current priority ordering. Use it as best-available
+        // attribution but make the resolution reason explicit about this.
+        const sourceA = sources[0] ?? 'unknown (prior session)';
 
         registry.stats.matters.conflicts.push({
           entityType: 'matter',
@@ -296,7 +299,7 @@ function extractMatterMappings(
           mappingB: matterNumber,
           sourceB: datasetName,
           resolution: 'kept_a',
-          resolutionReason: `${sourceA} has higher priority than ${datasetName}`,
+          resolutionReason: `Existing mapping preserved (source: ${sourceA}); conflicting value from ${datasetName} discarded`,
         });
       } else {
         const sources = registry.matters.sourceDatasets.get(matterId) ?? [];
@@ -511,6 +514,8 @@ function computeStats(registry: CrossReferenceRegistry): CrossReferenceStats {
       totalMappings: totalMatterMappings,
       certainMappings: certainMatter,
       inferredMappings: inferredMatter,
+      // conflictingMappings is read from the accumulated list (not recomputed from Maps
+      // because conflicts have no separate Map — they are only stored in stats.conflicts)
       conflictingMappings: registry.stats.matters.conflicts.length,
       conflicts: registry.stats.matters.conflicts,
     },
