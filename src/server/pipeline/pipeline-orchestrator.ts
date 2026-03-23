@@ -14,11 +14,14 @@ import {
   getCrossReferenceRegistry,
 } from '../lib/mongodb-operations.js';
 import { buildIndexes } from './indexer.js';
+import { joinRecords } from './joiner.js';
+import { enrichRecords } from './enricher.js';
 import type {
   NormaliseResult,
   CrossReferenceRegistry,
   CrossReferenceQualityStats,
   PipelineIndexes,
+  JoinResult,
 } from '@shared/types/pipeline.js';
 import type { DataQualityReport, KnownGap } from '@shared/types/index.js';
 
@@ -43,6 +46,7 @@ export interface PipelineResult {
   /** Enriched datasets after all stages have run. */
   enrichedDatasets: Record<string, NormaliseResult>;
   indexes: PipelineIndexes;
+  joinResult: JoinResult;
   dataQuality: Partial<DataQualityReport>;
 }
 
@@ -96,7 +100,15 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const indexes = buildIndexes(enrichedAfterCrossRef, entityKeys);
 
   // -------------------------------------------------------------------------
-  // Stages 5–8: stubs (pass-through until implemented)
+  // Stage 4: Join — resolve cross-entity references
+  // -------------------------------------------------------------------------
+  const rawJoinResult = joinRecords(enrichedAfterCrossRef, indexes);
+
+  // Stage 5: Enrich — compute derived fields and synthesise departments
+  const joinResult = enrichRecords(rawJoinResult, new Date());
+
+  // -------------------------------------------------------------------------
+  // Stages 6–8: stubs (pass-through until implemented)
   // -------------------------------------------------------------------------
   const enrichedDatasets = enrichedAfterCrossRef;
 
@@ -117,6 +129,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     crossReferenceRegistry,
     enrichedDatasets,
     indexes,
+    joinResult,
     dataQuality,
   };
 }
