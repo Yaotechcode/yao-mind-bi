@@ -28,6 +28,23 @@ describe('detectColumnType', () => {
     const values = ['100', '200', 'foo', 'bar', 'baz', 'qux', '300', 'abc', 'def', 'ghi'];
     expect(detectColumnType(values)).toBe('string');
   });
+
+  it('returns number (not boolean) for a single-value column of "1"', () => {
+    expect(detectColumnType(['1'])).toBe('number');
+  });
+
+  it('returns number (not boolean) for a column of only 0s and 1s', () => {
+    const values = ['0', '1', '0', '1', '1', '0'];
+    expect(detectColumnType(values)).toBe('number');
+  });
+
+  it('returns boolean for strict true/false values', () => {
+    expect(detectColumnType(['true', 'false', 'true', 'false'])).toBe('boolean');
+  });
+
+  it('returns boolean for yes/no values', () => {
+    expect(detectColumnType(['yes', 'no', 'yes', 'yes', 'no'])).toBe('boolean');
+  });
 });
 
 describe('coerceValue', () => {

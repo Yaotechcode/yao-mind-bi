@@ -4,7 +4,7 @@ import type { ParseError, ParserOptions } from './types.js';
 const DEFAULT_CURRENCY_SYMBOLS = ['£', '$', '€', ','];
 
 const BOOLEAN_VALUES = new Set([
-  'true', 'false', 'yes', 'no', '1', '0',
+  'true', 'false', 'yes', 'no',
   'TRUE', 'FALSE', 'YES', 'NO',
 ]);
 
