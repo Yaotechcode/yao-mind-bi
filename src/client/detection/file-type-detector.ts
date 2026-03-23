@@ -27,7 +27,7 @@ export const FILE_TYPE_SIGNATURES: Record<string, FileTypeSignature> = {
   feeEarnerCsv: {
     label: 'Fee Earner Data',
     requiredColumns: [],
-    strongSignalColumns: ['paymodel', 'feeshare', 'salary', 'annualsalary', 'chargeoutrate', 'targetweeklyhours', 'annualtarget'],
+    strongSignalColumns: ['paymodel', 'feeshare', 'salary', 'annualsalary', 'chargeoutrate', 'targetweeklyhours', 'annualtarget', 'chargeableweeklytarget'],
     weakSignalColumns: ['department', 'grade', 'name', 'email', 'startdate'],
     format: 'csv',
   },
