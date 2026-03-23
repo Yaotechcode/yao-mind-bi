@@ -5,7 +5,9 @@ import type {
   CalculatedKpisDocument,
   HistoricalSnapshotDocument,
   CustomEntityRecordDocument,
+  CrossReferenceRegistryDocument,
 } from '@shared/types/mongodb.js';
+import type { CrossReferenceRegistrySerialised } from '@shared/types/pipeline.js';
 
 // =============================================================================
 // MongoDB Operations
@@ -210,4 +212,48 @@ export async function upsertCustomEntityRecords(
     { firm_id: firmId, entity_type: entityType, records, updated_at: new Date() },
     { upsert: true }
   );
+}
+
+// ---------------------------------------------------------------------------
+// cross_reference_registries
+// ---------------------------------------------------------------------------
+
+/**
+ * Persist (upsert) the cross-reference registry for a firm.
+ * One document per firm — replaced on every pipeline run.
+ * Maps must be serialised to plain objects before calling this.
+ * Always includes firm_id in the filter — MongoDB isolation rule.
+ */
+export async function storeCrossReferenceRegistry(
+  firmId: string,
+  registry: CrossReferenceRegistrySerialised
+): Promise<void> {
+  const col = await getCollection<CrossReferenceRegistryDocument>(
+    'cross_reference_registries'
+  );
+  const doc: CrossReferenceRegistryDocument = {
+    firm_id: firmId,
+    data: registry,
+    updated_at: new Date(),
+  };
+  await col.replaceOne(
+    { firm_id: firmId },
+    doc,
+    { upsert: true }
+  );
+}
+
+/**
+ * Load the most recently persisted cross-reference registry for a firm.
+ * Returns null if no registry has been built yet.
+ * Always filters by firm_id — MongoDB isolation rule.
+ */
+export async function getCrossReferenceRegistry(
+  firmId: string
+): Promise<CrossReferenceRegistrySerialised | null> {
+  const col = await getCollection<CrossReferenceRegistryDocument>(
+    'cross_reference_registries'
+  );
+  const doc = await col.findOne({ firm_id: firmId });
+  return doc?.data ?? null;
 }
