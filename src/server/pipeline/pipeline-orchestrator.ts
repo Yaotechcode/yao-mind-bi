@@ -402,17 +402,35 @@ export async function runFullPipeline(
     uploadId
   );
 
-  await storeEnrichedEntities(
-    firmId,
-    entityKey,
-    (enrichedDatasets[fileType]?.records ?? normaliseResult.records) as Record<string, unknown>[],
-    [uploadId],
-    {
-      quality_score: aggregateResult.dataQuality.overallScore,
-      issue_count: aggregateResult.dataQuality.entityIssues.length,
-      issues: aggregateResult.dataQuality.entityIssues,
+  // Store join-enriched records for every entity type produced by the pipeline.
+  // This ensures enriched_entities contains fully resolved records (with fields
+  // like hasMatchedMatter, isChargeable, isOverdue, etc.) that the data API
+  // can filter on directly.
+  const joinEntityStore: Array<{ records: unknown[]; etype: string }> = [
+    { records: joinResult.timeEntries, etype: 'timeEntry' },
+    { records: joinResult.matters,     etype: 'matter' },
+    { records: joinResult.feeEarners,  etype: 'feeEarner' },
+    { records: joinResult.invoices,    etype: 'invoice' },
+    { records: joinResult.clients,     etype: 'client' },
+    { records: joinResult.disbursements, etype: 'disbursement' },
+    { records: joinResult.tasks,       etype: 'task' },
+    { records: joinResult.departments, etype: 'department' },
+  ];
+  for (const { records, etype } of joinEntityStore) {
+    if (records.length > 0) {
+      await storeEnrichedEntities(
+        firmId,
+        etype,
+        records as Record<string, unknown>[],
+        [uploadId],
+        etype === entityKey ? {
+          quality_score: aggregateResult.dataQuality.overallScore,
+          issue_count: aggregateResult.dataQuality.entityIssues.length,
+          issues: aggregateResult.dataQuality.entityIssues,
+        } : undefined
+      );
     }
-  );
+  }
 
   await storeCalculatedKpis(
     firmId,

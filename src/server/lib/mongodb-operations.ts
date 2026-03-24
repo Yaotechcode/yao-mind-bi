@@ -389,3 +389,12 @@ export async function setRecalculationFlag(firmId: string): Promise<void> {
     { upsert: true }
   );
 }
+
+/**
+ * Read the recalculation flag for a firm.
+ * Returns null if no flag exists (no uploads yet).
+ */
+export async function getRecalculationFlag(firmId: string): Promise<RecalculationFlagDocument | null> {
+  const col = await getCollection<RecalculationFlagDocument>('recalculation_flags');
+  return col.findOne({ firm_id: firmId });
+}
