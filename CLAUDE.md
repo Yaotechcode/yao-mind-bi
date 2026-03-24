@@ -86,6 +86,78 @@ After every change: run `tsc --noEmit` and the relevant test file. Fix all error
 
 ---
 
+## Phase 1B: Pipeline & Data Layer (complete)
+
+### Pipeline stage sequence
+
+Each upload triggers Stages 2–7 inside `runFullPipeline` in `src/server/pipeline/pipeline-orchestrator.ts`. Stages run in this exact order — never reorder them.
+
+| Stage | Name | Input | Output | Key type |
+|-------|------|-------|--------|----------|
+| 1 | **Parse** | Raw file (client-side) | Detected columns + raw rows | `ParseResult` |
+| 2 | **Normalise** | `ParseResult` + column mappings | Entity-typed records; invalid rows rejected | `NormaliseResult` / `NormalisedRecord[]` |
+| 3 | **Cross-Reference** | All normalised datasets + existing registry | Extended registry; both identifier forms on every record | `CrossReferenceRegistry` |
+| 4 | **Index** | All cross-referenced datasets | Lookup Maps (by id, by number, by name) | `PipelineIndexes` |
+| 5 | **Join** | Indexes + datasets | Records with resolved cross-entity references (`hasMatchedMatter`, `clientResolved`, `isOverdue`, etc.) | `JoinResult` |
+| 6 | **Enrich** | `JoinResult` | Derived fields added (`durationHours`, `isChargeable`, `recordedValue`, `ageInDays`, `weekNumber`, `monthKey`, `ageBand`, `firmExposure`) | `JoinResult` (updated in place) |
+| 7 | **Aggregate** | Enriched `JoinResult` + available file types | Per-firm, per-fee-earner, per-matter, per-client, per-department summaries + data quality report | `AggregateResult` |
+
+After Stage 7 the orchestrator persists:
+- **`enriched_entities`** — fully join-enriched records for all 8 entity types (timeEntry, matter, feeEarner, invoice, client, disbursement, task, department), one snapshot per upload
+- **`calculated_kpis.kpis.aggregate`** — the complete `AggregateResult` JSON, accessed via `getLatestCalculatedKpis(firmId)`
+
+### Key aggregated field names for the formula engine
+
+The formula engine (Phase 1C) reads from `calculated_kpis.kpis.aggregate`. These are the exact field names on each type:
+
+**`AggregatedFeeEarner`** (`aggregate.feeEarners[]`):
+- Effort: `wipTotalHours`, `wipChargeableHours`, `wipNonChargeableHours`, `wipEntryCount`
+- Value: `wipChargeableValue`, `wipTotalValue`, `wipWriteOffValue`
+- Orphaned WIP: `wipOrphanedHours`, `wipOrphanedValue`
+- Billing: `invoicedRevenue`, `invoicedOutstanding`, `invoicedCount`
+- Activity gap: `recordingGapDays` (calendar days since last WIP entry — null if no entries)
+- Identity: `lawyerId`, `lawyerName`
+
+**`AggregatedMatter`** (`aggregate.matters[]`):
+- Effort: `wipTotalHours`, `wipChargeableHours`, `wipNonChargeableHours`, `wipTotalBillable`, `wipTotalWriteOff`
+- Billing: `invoicedNetBilling`, `invoicedDisbursements`, `invoicedTotal`, `invoicedOutstanding`, `invoicedPaid`, `invoicedWrittenOff`, `invoiceCount`
+- Discrepancy: `discrepancy.billingDifference`, `discrepancy.billingDifferencePercent`, `discrepancy.hasMajorDiscrepancy` (threshold >10%)
+- Identity: `matterId`, `matterNumber`
+
+**`AggregatedFirm`** (`aggregate.firm`):
+- Effort: `totalWipHours`, `totalChargeableHours`, `totalWipValue`, `totalWriteOffValue`
+- Revenue: `totalInvoicedRevenue`, `totalOutstanding`, `totalPaid`
+- Orphaned WIP summary: `orphanedWip.orphanedWipEntryCount`, `orphanedWip.orphanedWipHours`, `orphanedWip.orphanedWipValue`, `orphanedWip.orphanedWipPercent`
+- Fee earner counts: `feeEarnerCount`, `activeFeeEarnerCount`, `salariedFeeEarnerCount`, `feeShareFeeEarnerCount`
+
+**`EnrichedTimeEntry`** (individual records from `enriched_entities`, entity type `timeEntry`):
+- `durationHours`, `isChargeable`, `recordedValue`
+- `hasMatchedMatter` (false = orphaned), `lawyerGrade`, `lawyerPayModel`
+- `ageInDays`, `weekNumber`, `monthKey`
+
+### Dual source of truth
+
+Two independent data sources cover overlapping ground — their values will differ and must never be silently reconciled:
+
+- **WIP / time recording** (`wipJson`) = source of truth for **effort**: hours billed, write-offs, chargeability, fee earner activity. Use `wipTotalBillable`, `wipTotalHours`, `wipWriteOffValue`.
+- **Yao invoiced data** (`invoicesJson`, `fullMattersJson`) = source of truth for **revenue**: what was actually invoiced and collected. Use `invoicedNetBilling`, `invoicedOutstanding`, `invoicedPaid`.
+
+When both sources cover the same matter, `AggregatedMatter.discrepancy` captures the gap. `hasMajorDiscrepancy: true` means the difference exceeds 10%. Formulas that mix both sources must document which source they use for each component. Flag discrepancies to the user — never silently pick one.
+
+### Known data characteristics
+
+These are structural realities of the real firm data, not bugs. Formulas must handle them gracefully:
+
+**~49% WIP orphan rate** — approximately half of all WIP entries have no matched matter (`hasMatchedMatter: false`). Causes: WIP uses `matterId` (UUID), matter exports use `matterNumber` (integer); if the cross-reference registry doesn't have the mapping yet, the entry is orphaned. Orphaned entries are included in firm-level and fee-earner-level totals (`wipOrphanedHours`, `wipOrphanedValue`) but excluded from matter-level analysis. Never drop them silently.
+
+**`responsibleLawyerId` sometimes missing on matters** — the full matters export does not always include the lawyer's UUID, only their display name (`responsibleLawyer`). When `responsibleLawyerId` is null, use the cross-reference registry to resolve from name, then fall back to `responsibleLawyer` as a display-only value. Formulas that join matter data to fee earner data must handle this — do not assume the UUID is always present.
+
+**`datePaid` not yet in invoice data** — the current invoice export does not include a payment date. This field has `missingBehaviour: 'degrade'` in the entity registry. Any formula that calculates cash collection speed or aged debt will run in PARTIAL/BLOCKED readiness until `datePaid` is populated. Design those formulas to return null gracefully when `datePaid` is absent.
+
+**`lawyerGrade` depends on fee earner CSV** — `lawyerGrade` and `lawyerPayModel` on `EnrichedTimeEntry` records are populated from the fee earner CSV file. If that file has not been uploaded, both fields are null on every time entry. Grade-dependent formulas (utilisation targets, cost rate by grade) will be BLOCKED until the fee earner file is present.
+
+---
+
 ## Data Model Essentials
 
 **Dual source of truth**: Yao (billing) for money, WIP (time recording) for hours. Flag discrepancies — never silently resolve them.
