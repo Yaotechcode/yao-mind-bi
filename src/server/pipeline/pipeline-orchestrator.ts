@@ -316,7 +316,9 @@ export async function runFullPipeline(
 
   const rejectedCount = normaliseResult.rejectedRows?.length ?? 0;
   const totalCount = parseResult.fullRows.length;
-  // If all rows were blank/rejected (records.length === 0), treat as 100% rejected
+  // The normaliser strips blank rows via the blank-row filter before they reach
+  // rejectedRows tracking. This means blank inputs produce records.length === 0
+  // but rejectedRows may be empty. We treat all-blank uploads as fully rejected.
   const effectiveRejectedCount = normaliseResult.records.length === 0 && totalCount > 0
     ? totalCount
     : rejectedCount;
@@ -382,7 +384,7 @@ export async function runFullPipeline(
   const rawJoinResult = joinRecords(enrichedDatasets, indexes);
   stagesCompleted.push('join');
 
-  // ── Stage 5 (enrich): Enrich ──────────────────────────────────────────────
+  // ── Stage 6: Enrich ───────────────────────────────────────────────────────
   const joinResult = enrichRecords(rawJoinResult, new Date());
   stagesCompleted.push('enrich');
 
@@ -403,7 +405,7 @@ export async function runFullPipeline(
   await storeEnrichedEntities(
     firmId,
     entityKey,
-    normaliseResult.records as Record<string, unknown>[],
+    (enrichedDatasets[fileType]?.records ?? normaliseResult.records) as Record<string, unknown>[],
     [uploadId],
     {
       quality_score: aggregateResult.dataQuality.overallScore,
