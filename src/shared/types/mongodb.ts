@@ -20,7 +20,7 @@ export interface RawUploadDocument {
   /** Parsed rows from the file */
   raw_content: Record<string, unknown>[];
   record_count: number;
-  status: 'pending' | 'processing' | 'processed' | 'error';
+  status: 'pending' | 'processing' | 'processed' | 'error' | 'deleted';
   error_message?: string;
   processing_started_at?: Date;
   processing_completed_at?: Date;
@@ -75,6 +75,32 @@ export interface CustomEntityRecordDocument {
   entity_type: string;
   records: Record<string, unknown>[];
   updated_at: Date;
+}
+
+// normalised_datasets — one upserted document per (firm_id, file_type)
+// Stores normalised records so subsequent uploads can incorporate prior data
+// into cross-reference building without re-parsing raw files.
+export interface NormalisedDatasetDocument {
+  _id?: ObjectId;
+  firm_id: string;
+  /** Pipeline file-type key, e.g. 'wipJson', 'fullMattersJson' */
+  file_type: string;
+  /** Entity-type key used by normaliser rules, e.g. 'timeEntry', 'matter' */
+  entity_key: string;
+  /** Source upload _id that produced this normalised dataset */
+  source_upload_id: string;
+  records: Record<string, unknown>[];
+  record_count: number;
+  normalised_at: Date;
+}
+
+// recalculation_flags — one document per firm_id
+// Set when new data is uploaded; cleared when formula engine runs.
+export interface RecalculationFlagDocument {
+  _id?: ObjectId;
+  firm_id: string;
+  is_stale: boolean;
+  stale_since: Date;
 }
 
 // cross_reference_registries — one document per firm, upserted on every pipeline run

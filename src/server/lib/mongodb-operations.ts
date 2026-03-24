@@ -6,8 +6,14 @@ import type {
   HistoricalSnapshotDocument,
   CustomEntityRecordDocument,
   CrossReferenceRegistryDocument,
+  NormalisedDatasetDocument,
+  RecalculationFlagDocument,
 } from '@shared/types/mongodb.js';
-import type { CrossReferenceRegistrySerialised } from '@shared/types/pipeline.js';
+import type {
+  CrossReferenceRegistrySerialised,
+  NormaliseResult,
+  NormalisedRecord,
+} from '@shared/types/pipeline.js';
 
 // =============================================================================
 // MongoDB Operations
@@ -256,4 +262,130 @@ export async function getCrossReferenceRegistry(
   );
   const doc = await col.findOne({ firm_id: firmId });
   return doc?.data ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// raw_uploads — status updates
+// ---------------------------------------------------------------------------
+
+/**
+ * Update the status of a raw_upload document.
+ * Always filters by firm_id to enforce data isolation.
+ */
+export async function updateUploadStatus(
+  firmId: string,
+  uploadId: string,
+  status: RawUploadDocument['status'],
+  errorMessage?: string
+): Promise<void> {
+  const col = await getCollection<RawUploadDocument>('raw_uploads');
+  const { ObjectId } = await import('mongodb');
+  const update: Record<string, unknown> = { status };
+  if (status === 'processing') update['processing_started_at'] = new Date();
+  if (status === 'processed')  update['processing_completed_at'] = new Date();
+  if (errorMessage)            update['error_message'] = errorMessage;
+  await col.updateOne(
+    { _id: new ObjectId(uploadId), firm_id: firmId },
+    { $set: update }
+  );
+}
+
+/**
+ * Retrieve a single raw_upload document by id.
+ * Returns null if not found or if the document belongs to a different firm.
+ */
+export async function getUploadById(
+  firmId: string,
+  uploadId: string
+): Promise<RawUploadDocument | null> {
+  const col = await getCollection<RawUploadDocument>('raw_uploads');
+  const { ObjectId } = await import('mongodb');
+  return col.findOne({ _id: new ObjectId(uploadId), firm_id: firmId });
+}
+
+// ---------------------------------------------------------------------------
+// normalised_datasets
+// ---------------------------------------------------------------------------
+
+/**
+ * Upsert the normalised dataset for a file type.
+ * One document per (firm_id, file_type) — replaced on every new upload.
+ */
+export async function storeNormalisedDataset(
+  firmId: string,
+  fileType: string,
+  entityKey: string,
+  records: NormalisedRecord[],
+  sourceUploadId: string
+): Promise<void> {
+  const col = await getCollection<NormalisedDatasetDocument>('normalised_datasets');
+  const doc: NormalisedDatasetDocument = {
+    firm_id: firmId,
+    file_type: fileType,
+    entity_key: entityKey,
+    source_upload_id: sourceUploadId,
+    records: records as Record<string, unknown>[],
+    record_count: records.length,
+    normalised_at: new Date(),
+  };
+  await col.replaceOne(
+    { firm_id: firmId, file_type: fileType },
+    doc,
+    { upsert: true }
+  );
+}
+
+/**
+ * Load all normalised datasets for a firm as a Record<fileType, NormaliseResult>.
+ * Returns empty record if no datasets have been stored yet.
+ */
+export async function getAllNormalisedDatasets(
+  firmId: string
+): Promise<Record<string, NormaliseResult>> {
+  const col = await getCollection<NormalisedDatasetDocument>('normalised_datasets');
+  const docs = await col.find({ firm_id: firmId }).toArray();
+  const result: Record<string, NormaliseResult> = {};
+  for (const doc of docs) {
+    result[doc.file_type] = {
+      fileType: doc.entity_key,
+      records: doc.records as NormalisedRecord[],
+      recordCount: doc.record_count,
+      normalisedAt: doc.normalised_at.toISOString(),
+    };
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// enriched_entities — delete
+// ---------------------------------------------------------------------------
+
+/**
+ * Delete all enriched entity snapshots for a firm + entity type.
+ * Used when an upload is deleted to clear derived data.
+ */
+export async function deleteEnrichedEntitiesByType(
+  firmId: string,
+  entityType: string
+): Promise<void> {
+  const col = await getCollection<EnrichedEntitiesDocument>('enriched_entities');
+  await col.deleteMany({ firm_id: firmId, entity_type: entityType });
+}
+
+// ---------------------------------------------------------------------------
+// recalculation_flags
+// ---------------------------------------------------------------------------
+
+/**
+ * Mark this firm's calculated KPIs as stale.
+ * Called after every successful upload. The formula engine (1C) checks
+ * this flag before running and clears it after completion.
+ */
+export async function setRecalculationFlag(firmId: string): Promise<void> {
+  const col = await getCollection<RecalculationFlagDocument>('recalculation_flags');
+  await col.replaceOne(
+    { firm_id: firmId },
+    { firm_id: firmId, is_stale: true, stale_since: new Date() },
+    { upsert: true }
+  );
 }
