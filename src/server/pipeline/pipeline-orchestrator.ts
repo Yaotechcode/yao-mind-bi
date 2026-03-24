@@ -12,10 +12,19 @@ import {
 import {
   storeCrossReferenceRegistry,
   getCrossReferenceRegistry,
+  updateUploadStatus,
+  storeNormalisedDataset,
+  getAllNormalisedDatasets,
+  storeEnrichedEntities,
+  storeCalculatedKpis,
+  setRecalculationFlag,
 } from '../lib/mongodb-operations.js';
 import { buildIndexes } from './indexer.js';
 import { joinRecords } from './joiner.js';
 import { enrichRecords } from './enricher.js';
+import { normaliseRecords } from './normaliser.js';
+import { aggregate } from './aggregator.js';
+import { getBuiltInEntityDefinition } from '../../shared/entities/registry.js';
 import type {
   NormaliseResult,
   CrossReferenceRegistry,
@@ -23,7 +32,10 @@ import type {
   PipelineIndexes,
   JoinResult,
 } from '@shared/types/pipeline.js';
-import type { DataQualityReport, KnownGap } from '@shared/types/index.js';
+import type { DataQualityReport, KnownGap, EntityType, ColumnMapping } from '@shared/types/index.js';
+import type { MappingSet as ClientMappingSet } from '../../shared/mapping/types.js';
+import type { ParseResult } from '../../client/parsers/types.js';
+import type { PipelineRunResult, PipelineWarning } from './pipeline-types.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -219,4 +231,204 @@ export function buildKnownGaps(
   }
 
   return gaps;
+}
+
+// ---------------------------------------------------------------------------
+// File type → entity key maps
+// ---------------------------------------------------------------------------
+
+const FILE_TYPE_TO_ENTITY_KEY: Record<string, string> = {
+  wipJson: 'timeEntry',
+  fullMattersJson: 'matter',
+  closedMattersJson: 'matter',
+  feeEarner: 'feeEarner',
+  invoicesJson: 'invoice',
+  contactsJson: 'client',
+  disbursementsJson: 'disbursement',
+  tasksJson: 'task',
+};
+
+const ENTITY_KEY_TO_ENUM: Record<string, EntityType> = {
+  timeEntry: 'timeEntry' as EntityType,
+  matter: 'matter' as EntityType,
+  feeEarner: 'feeEarner' as EntityType,
+  invoice: 'invoice' as EntityType,
+  client: 'client' as EntityType,
+  disbursement: 'disbursement' as EntityType,
+  task: 'task' as EntityType,
+};
+
+// ---------------------------------------------------------------------------
+// runFullPipeline — orchestrates Stages 2–7 for a single file upload
+// ---------------------------------------------------------------------------
+
+export interface FullPipelineParams {
+  firmId: string;
+  userId: string;
+  uploadId: string;
+  fileType: string;
+  parseResult: ParseResult;
+  mappingSet: ClientMappingSet;
+  dryRun?: boolean;
+}
+
+export interface FullPipelineResult extends PipelineRunResult {
+  aborted?: boolean;
+  previewData?: {
+    normalisedCount: number;
+    rejectedCount: number;
+    warnings: unknown[];
+  };
+}
+
+export async function runFullPipeline(
+  params: FullPipelineParams
+): Promise<FullPipelineResult> {
+  const { firmId, uploadId, fileType, parseResult, mappingSet, dryRun = false } = params;
+  const startTime = Date.now();
+  const stagesCompleted: FullPipelineResult['stagesCompleted'] = [];
+  const warnings: PipelineWarning[] = [];
+
+  const entityKey = FILE_TYPE_TO_ENTITY_KEY[fileType];
+  if (!entityKey) {
+    throw new Error(`Unknown fileType: ${fileType}`);
+  }
+
+  const entityTypeEnum = ENTITY_KEY_TO_ENUM[entityKey];
+  const entityDef = getBuiltInEntityDefinition(entityTypeEnum as EntityType);
+  if (!entityDef) {
+    throw new Error(`No entity definition for entityKey: ${entityKey}`);
+  }
+
+  // Convert client MappingSet to normaliser format (ColumnMapping[])
+  const normaliserMappings: ColumnMapping[] = mappingSet.mappings
+    .filter(m => m.mappedTo !== null)
+    .map(m => ({ sourceColumn: m.rawColumn, targetField: m.mappedTo! }));
+
+  // ── Stage 2: Normalise ────────────────────────────────────────────────────
+  const normaliseResult = normaliseRecords(
+    parseResult.fullRows,
+    normaliserMappings,
+    entityKey,
+    entityDef
+  );
+  stagesCompleted.push('normalise');
+
+  const rejectedCount = normaliseResult.rejectedRows?.length ?? 0;
+  const totalCount = parseResult.fullRows.length;
+  // If all rows were blank/rejected (records.length === 0), treat as 100% rejected
+  const effectiveRejectedCount = normaliseResult.records.length === 0 && totalCount > 0
+    ? totalCount
+    : rejectedCount;
+  const rejectedPercent = totalCount > 0 ? (effectiveRejectedCount / totalCount) * 100 : 0;
+
+  // Dry run: return preview, skip persistence
+  if (dryRun) {
+    return {
+      uploadId,
+      stagesCompleted,
+      warnings,
+      recordsProcessed: normaliseResult.recordCount,
+      recordsPersisted: 0,
+      duration_ms: Date.now() - startTime,
+      previewData: {
+        normalisedCount: normaliseResult.recordCount,
+        rejectedCount: effectiveRejectedCount,
+        warnings: normaliseResult.warnings ?? [],
+      },
+    };
+  }
+
+  // Abort if > 50% rejected
+  if (rejectedPercent > 50) {
+    const msg = `${effectiveRejectedCount} of ${totalCount} rows rejected (${Math.round(rejectedPercent)}%) — exceeds 50% threshold`;
+    await updateUploadStatus(firmId, uploadId, 'error', msg);
+    return {
+      uploadId,
+      stagesCompleted,
+      warnings,
+      recordsProcessed: normaliseResult.recordCount,
+      recordsPersisted: 0,
+      duration_ms: Date.now() - startTime,
+      aborted: true,
+    };
+  }
+
+  if (normaliseResult.warnings?.length) {
+    for (const w of normaliseResult.warnings) {
+      warnings.push({ stage: 'normalise', message: w.message, severity: 'warning', count: w.affectedRowCount });
+    }
+  }
+
+  // ── Stage 3: Cross-Reference ──────────────────────────────────────────────
+  const existingDatasets = await getAllNormalisedDatasets(firmId);
+  const allDatasets: Record<string, NormaliseResult> = {
+    ...existingDatasets,
+    [fileType]: normaliseResult,
+  };
+
+  const existingSerialised = await getCrossReferenceRegistry(firmId);
+  const existingRegistry = existingSerialised ? deserialiseRegistry(existingSerialised) : undefined;
+  const updatedRegistry = buildCrossReferenceRegistry(firmId, allDatasets, existingRegistry);
+  const enrichedDatasets = applyRegistryToDatasets(allDatasets, updatedRegistry);
+  await storeCrossReferenceRegistry(firmId, serialiseRegistry(updatedRegistry));
+  stagesCompleted.push('crossReference');
+
+  // ── Stage 4: Index ────────────────────────────────────────────────────────
+  const indexes = buildIndexes(enrichedDatasets, Object.keys(enrichedDatasets));
+  stagesCompleted.push('index');
+
+  // ── Stage 5: Join ─────────────────────────────────────────────────────────
+  const rawJoinResult = joinRecords(enrichedDatasets, indexes);
+  stagesCompleted.push('join');
+
+  // ── Stage 5 (enrich): Enrich ──────────────────────────────────────────────
+  const joinResult = enrichRecords(rawJoinResult, new Date());
+  stagesCompleted.push('enrich');
+
+  // ── Stage 6: Aggregate ────────────────────────────────────────────────────
+  const availableFileTypes = Object.keys(allDatasets);
+  const aggregateResult = aggregate(joinResult, new Date(), availableFileTypes);
+  stagesCompleted.push('aggregate');
+
+  // ── Persist ───────────────────────────────────────────────────────────────
+  await storeNormalisedDataset(
+    firmId,
+    fileType,
+    entityKey,
+    enrichedDatasets[fileType]?.records ?? normaliseResult.records,
+    uploadId
+  );
+
+  await storeEnrichedEntities(
+    firmId,
+    entityKey,
+    normaliseResult.records as Record<string, unknown>[],
+    [uploadId],
+    {
+      quality_score: aggregateResult.dataQuality.overallScore,
+      issue_count: aggregateResult.dataQuality.entityIssues.length,
+      issues: aggregateResult.dataQuality.entityIssues,
+    }
+  );
+
+  await storeCalculatedKpis(
+    firmId,
+    { aggregate: aggregateResult as unknown as Record<string, unknown>, generatedAt: new Date().toISOString() },
+    'pending',
+    new Date().toISOString()
+  );
+
+  await setRecalculationFlag(firmId);
+
+  await updateUploadStatus(firmId, uploadId, 'processed');
+
+  return {
+    uploadId,
+    stagesCompleted,
+    warnings,
+    recordsProcessed: normaliseResult.recordCount,
+    recordsPersisted: normaliseResult.recordCount,
+    duration_ms: Date.now() - startTime,
+  };
 }
