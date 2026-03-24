@@ -388,7 +388,7 @@ export async function runFullPipeline(
   const joinResult = enrichRecords(rawJoinResult, new Date());
   stagesCompleted.push('enrich');
 
-  // ── Stage 6: Aggregate ────────────────────────────────────────────────────
+  // ── Stage 7: Aggregate ────────────────────────────────────────────────────
   const availableFileTypes = Object.keys(allDatasets);
   const aggregateResult = aggregate(joinResult, new Date(), availableFileTypes);
   stagesCompleted.push('aggregate');
