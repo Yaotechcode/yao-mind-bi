@@ -29,7 +29,13 @@
       "Bash(grep -A10 '\"\"vitest\"\"' package.json)",
       "Bash(grep -rn \"entity_key\\\\|entityKey\\\\|formula_registry\" C:Projectsyao-mindsrc --include=*.ts -l)",
       "Bash(FIRM_ID=00000000-0000-0000-0000-000000000001 FIRM_NAME=\"Test Firm\" npx tsx src/scripts/seed-firm.ts)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(tsc:*)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\(''''compilerOptions'''',{}\\).get\\(''''paths'''',{}\\), indent=2\\)\\)\")",
+      "Bash(node:*)",
+      "Bash(npx tsx:*)",
+      "Bash(python3 -c \":*)",
+      "Bash(find C:Projectsyao-mindsrcsharedmapping -name *.ts)"
     ]
   }
 }

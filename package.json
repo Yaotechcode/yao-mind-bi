@@ -14,9 +14,14 @@
     "verify:1b01": "tsx scripts/test-parsers.ts",
     "verify:1b02": "tsx scripts/test-1b02.ts",
     "verify:1b03": "tsx scripts/test-1b03.ts",
-    "verify:1b03b":   "tsx scripts/test-1b03b.ts",
-    "verify:1b04":    "tsx scripts/test-1b04.ts",
-    "verify:pipeline": "tsx scripts/test-parsers.ts && tsx scripts/test-1b02.ts && tsx scripts/test-1b03.ts && tsx scripts/test-1b03b.ts && tsx scripts/test-1b04.ts"
+    "verify:1b03b": "tsx scripts/test-1b03b.ts",
+    "verify:1b04": "tsx scripts/test-1b04.ts",
+    "verify:1b05": "tsx scripts/test-1b05.ts",
+    "verify:1b06":     "tsx scripts/test-1b06.ts",
+    "verify:1b07":     "tsx scripts/test-1b07.ts",
+    "verify:1b08":     "tsx scripts/test-1b08.ts",
+"verify:pipeline": "tsx scripts/test-parsers.ts && tsx scripts/test-1b02.ts && tsx scripts/test-1b03.ts && tsx scripts/test-1b03b.ts && tsx scripts/test-1b04.ts && tsx scripts/test-1b05.ts && tsx scripts/test-1b06.ts && tsx scripts/test-1b07.ts && tsx scripts/test-1b08.ts"
+    
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.1.11",
