@@ -1,7 +1,15 @@
 // src/server/pipeline/pipeline-orchestrator.ts
 //
-// Pipeline Orchestrator — stub (Task 5 will implement the full version).
-// Exports only what cross-reference.test.ts needs for its quality-stats tests.
+// Pipeline Orchestrator — wires Stages 2–7 for a single file upload.
+//
+// runFullPipeline: production entry point used by the upload Netlify Function.
+//   Stages 2 (Normalise) → 3 (Cross-Reference) → 4 (Index) → 5 (Join) →
+//   6 (Enrich) → 7 (Aggregate) → persistence (enriched entities + KPIs).
+//
+// runPipeline: lightweight test-support function used by pipeline unit tests.
+//   Executes Stages 2–6 in-memory without persistence.
+//
+// buildCrossRefQualityStats / buildKnownGaps: exported for cross-reference tests.
 
 import {
   buildCrossReferenceRegistry,

@@ -171,9 +171,15 @@ async function handleFeeEarner(firmId: string, id: string): Promise<HandlerRespo
 
   if (!feeEarner) return successResponse(null);
 
+  // Use the resolved identifier forms from the aggregate record so that time
+  // entries are matched regardless of which form the URL id was in.
+  const resolvedLawyerId = feeEarner.lawyerId;
+  const resolvedLawyerName = feeEarner.lawyerName;
+
   const allTimeEntries = (timeEntryDoc?.records ?? []) as EnrichedTimeEntry[];
-  const timeEntries = allTimeEntries.filter(
-    te => te.lawyerId === id || te.lawyerName === id
+  const timeEntries = allTimeEntries.filter(te =>
+    (resolvedLawyerId && te.lawyerId === resolvedLawyerId) ||
+    (resolvedLawyerName && te.lawyerName === resolvedLawyerName)
   );
 
   return successResponse({ ...feeEarner, timeEntries });
@@ -206,8 +212,11 @@ async function handleMatters(
   // Apply filters using enriched matter fields
   if (qp['status'] || qp['department'] || qp['lawyerId']) {
     records = records.filter(m => {
-      const em = enrichedByNumber.get(m.matterNumber ?? '') ??
-                 enrichedByNumber.get(m.matterId ?? '') ?? {};
+      // Skip unidentifiable records rather than silently matching against key ''
+      if (!m.matterNumber && !m.matterId) return false;
+
+      const em = (m.matterNumber ? enrichedByNumber.get(m.matterNumber) : undefined) ??
+                 (m.matterId ? enrichedByNumber.get(m.matterId) : undefined) ?? {};
 
       if (qp['status']) {
         const status = em['matterStatus'] ?? em['status'];
@@ -247,11 +256,18 @@ async function handleMatter(firmId: string, id: string): Promise<HandlerResponse
   const allTimeEntries = (timeEntryDoc?.records ?? []) as EnrichedTimeEntry[];
   const allInvoices = (invoiceDoc?.records ?? []) as EnrichedInvoice[];
 
-  const timeEntries = allTimeEntries.filter(
-    te => te.matterId === id || te.matterNumber === id
+  // Use the resolved identifier forms from the aggregate record so that related
+  // records are found regardless of which form the URL id was in.
+  const resolvedMatterId = matter.matterId;
+  const resolvedMatterNumber = matter.matterNumber;
+
+  const timeEntries = allTimeEntries.filter(te =>
+    (resolvedMatterId && te.matterId === resolvedMatterId) ||
+    (resolvedMatterNumber && te.matterNumber === resolvedMatterNumber)
   );
-  const invoices = allInvoices.filter(
-    inv => inv.matterId === id || inv.matterNumber === id
+  const invoices = allInvoices.filter(inv =>
+    (resolvedMatterId && inv.matterId === resolvedMatterId) ||
+    (resolvedMatterNumber && inv.matterNumber === resolvedMatterNumber)
   );
 
   return successResponse({ ...matter, timeEntries, invoices });

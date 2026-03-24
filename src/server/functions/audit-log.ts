@@ -114,9 +114,7 @@ export const handler: Handler = async (event) => {
     console.error('[audit-log] Unexpected error:', err);
     return {
       statusCode: 500,
-      body: JSON.stringify({
-        error: err instanceof Error ? err.message : 'Internal server error',
-      }),
+      body: JSON.stringify({ error: 'Internal server error' }),
     };
   }
 };

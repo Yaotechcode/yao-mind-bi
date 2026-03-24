@@ -16,12 +16,12 @@ import type { MappingSet } from '../../shared/mapping/types.js';
 import type { ParseResult } from '../../client/parsers/types.js';
 
 export const handler: Handler = async (event) => {
+  if (event.httpMethod !== 'POST') {
+    return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
+  }
+
   try {
     const { firmId, userId } = await authenticateRequest(event);
-
-    if (event.httpMethod !== 'POST') {
-      return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
-    }
 
     if (!event.body) {
       return { statusCode: 400, body: JSON.stringify({ error: 'Request body is required' }) };
