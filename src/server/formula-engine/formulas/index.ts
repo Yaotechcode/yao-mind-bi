@@ -25,6 +25,13 @@ import {
   disbursementRecovery,
   lockUpDays,
 } from './wip-leakage.js';
+import {
+  matterProfitability,
+  feeEarnerProfitability,
+  departmentProfitability,
+  clientProfitability,
+  firmProfitability,
+} from './profitability.js';
 
 /**
  * Register all built-in formula implementations with the engine.
@@ -47,4 +54,11 @@ export function registerAllBuiltInFormulas(engine: FormulaEngine): void {
   engine.registerFormula('F-WL-02', writeOffAnalysis);
   engine.registerFormula('F-WL-03', disbursementRecovery);
   engine.registerFormula('F-WL-04', lockUpDays);
+
+  // Profitability (1C-05)
+  engine.registerFormula('F-PR-01', matterProfitability);
+  engine.registerFormula('F-PR-02', feeEarnerProfitability);
+  engine.registerFormula('F-PR-03', departmentProfitability);
+  engine.registerFormula('F-PR-04', clientProfitability);
+  engine.registerFormula('F-PR-05', firmProfitability);
 }
