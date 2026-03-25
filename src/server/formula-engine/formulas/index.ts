@@ -19,6 +19,12 @@ import {
   revenuePerFeeEarner,
   billingVelocity,
 } from './revenue.js';
+import {
+  wipAge,
+  writeOffAnalysis,
+  disbursementRecovery,
+  lockUpDays,
+} from './wip-leakage.js';
 
 /**
  * Register all built-in formula implementations with the engine.
@@ -35,4 +41,10 @@ export function registerAllBuiltInFormulas(engine: FormulaEngine): void {
   engine.registerFormula('F-RB-02', effectiveHourlyRate);
   engine.registerFormula('F-RB-03', revenuePerFeeEarner);
   engine.registerFormula('F-RB-04', billingVelocity);
+
+  // WIP & Leakage (1C-04)
+  engine.registerFormula('F-WL-01', wipAge);
+  engine.registerFormula('F-WL-02', writeOffAnalysis);
+  engine.registerFormula('F-WL-03', disbursementRecovery);
+  engine.registerFormula('F-WL-04', lockUpDays);
 }
