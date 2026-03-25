@@ -32,6 +32,13 @@ import {
   clientProfitability,
   firmProfitability,
 } from './profitability.js';
+import { budgetBurnRate, scopeCreepIndicator } from './budget.js';
+import { agedDebtorAnalysis } from './debtors.js';
+import {
+  recoveryOpportunity,
+  feeEarnerScorecard,
+  matterHealthScore,
+} from './composites.js';
 
 /**
  * Register all built-in formula implementations with the engine.
@@ -61,4 +68,16 @@ export function registerAllBuiltInFormulas(engine: FormulaEngine): void {
   engine.registerFormula('F-PR-03', departmentProfitability);
   engine.registerFormula('F-PR-04', clientProfitability);
   engine.registerFormula('F-PR-05', firmProfitability);
+
+  // Budget & Scope (1C-06)
+  engine.registerFormula('F-BS-01', budgetBurnRate);
+  engine.registerFormula('F-BS-02', scopeCreepIndicator);
+
+  // Debtors (1C-06)
+  engine.registerFormula('F-DM-01', agedDebtorAnalysis);
+
+  // Composites (1C-06)
+  engine.registerFormula('F-CS-01', recoveryOpportunity);
+  engine.registerFormula('F-CS-02', feeEarnerScorecard);
+  engine.registerFormula('F-CS-03', matterHealthScore);
 }
