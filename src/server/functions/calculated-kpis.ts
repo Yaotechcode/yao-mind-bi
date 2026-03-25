@@ -44,15 +44,18 @@ export const handler: Handler = async (event) => {
         });
       }
 
+      const kpis = kpisDoc.kpis as Record<string, unknown>;
       return successResponse({
         calculatedAt: new Date(kpisDoc.calculated_at).toISOString(),
         isStale: flagDoc?.is_stale ?? false,
         configVersion: kpisDoc.config_version,
         dataVersion: kpisDoc.data_version,
-        // In Phase 1B the kpis object holds aggregate + generatedAt; the formula
-        // engine (1C) will populate top-level KPI keys. Return only the
-        // formula-engine portion (exclude the raw aggregate blob).
-        kpis: {},
+        formulaVersionSnapshot: kpis['formulaVersionSnapshot'] ?? null,
+        results: kpis['formulaResults'] ?? {},
+        ragAssignments: kpis['ragAssignments'] ?? {},
+        ragSummary: kpis['ragSummary'] ?? null,
+        readiness: kpis['readiness'] ?? {},
+        calculationMetadata: kpis['calculationMetadata'] ?? null,
       });
     }
 

@@ -398,3 +398,16 @@ export async function getRecalculationFlag(firmId: string): Promise<Recalculatio
   const col = await getCollection<RecalculationFlagDocument>('recalculation_flags');
   return col.findOne({ firm_id: firmId });
 }
+
+/**
+ * Clear the recalculation flag for a firm.
+ * Called after the formula engine successfully completes a calculation run.
+ */
+export async function clearRecalculationFlag(firmId: string): Promise<void> {
+  const col = await getCollection<RecalculationFlagDocument>('recalculation_flags');
+  await col.replaceOne(
+    { firm_id: firmId },
+    { firm_id: firmId, is_stale: false, stale_since: new Date() },
+    { upsert: true }
+  );
+}
