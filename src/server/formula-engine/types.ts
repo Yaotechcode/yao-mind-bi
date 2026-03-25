@@ -69,6 +69,14 @@ export interface SnippetContext {
   feeEarner: AggregatedFeeEarner;
   firmConfig: FirmConfig;
   feeEarnerOverride?: Record<string, unknown>;
+  /**
+   * Previously computed snippet results for THIS fee earner.
+   * Populated by the SnippetEngine in dependency order.
+   * Key: snippetId → the result for the current feeEarner.
+   * Snippets that depend on other snippets (e.g. SN-001 depends on SN-002)
+   * read their dependency value from here.
+   */
+  priorSnippetResults?: Record<string, SnippetResult>;
 }
 
 // =============================================================================
@@ -149,6 +157,8 @@ export interface SnippetResult {
   entityId: string;
   value: number | null;
   nullReason: string | null;
+  /** Optional detail breakdown — how the value was derived. */
+  breakdown?: Record<string, unknown>;
 }
 
 // =============================================================================

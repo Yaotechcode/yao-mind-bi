@@ -105,11 +105,20 @@ export class FormulaEngine {
       for (const feeEarner of context.feeEarners) {
         const entityId = resolveEntityId(feeEarner.lawyerId, feeEarner.lawyerName);
         const override = context.feeEarnerOverrides[entityId];
+
+        // Collect all already-computed snippet results for this fee earner
+        // so dependent snippets (e.g. SN-001 → SN-002) can access them.
+        const priorSnippetResults: Record<string, SnippetResult> = {};
+        for (const [sid, entityMap] of Object.entries(context.snippetResults)) {
+          if (entityMap[entityId]) priorSnippetResults[sid] = entityMap[entityId];
+        }
+
         try {
           const result = impl.execute({
             feeEarner,
             firmConfig: context.firmConfig,
             feeEarnerOverride: override,
+            priorSnippetResults,
           });
           context.snippetResults[snippetId][entityId] = result;
         } catch (err) {
@@ -194,11 +203,19 @@ export class FormulaEngine {
       for (const feeEarner of context.feeEarners) {
         const entityId = resolveEntityId(feeEarner.lawyerId, feeEarner.lawyerName);
         const override = context.feeEarnerOverrides[entityId];
+
+        // Build prior results for this fee earner from already-computed snippets
+        const priorSnippetResults: Record<string, SnippetResult> = {};
+        for (const [sid, entityMap] of Object.entries(localSnippetResults)) {
+          if (entityMap[entityId]) priorSnippetResults[sid] = entityMap[entityId];
+        }
+
         try {
           const result = snippetImpl.execute({
             feeEarner,
             firmConfig: context.firmConfig,
             feeEarnerOverride: override,
+            priorSnippetResults,
           });
           localSnippetResults[snippetId][entityId] = result;
         } catch (err) {
