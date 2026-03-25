@@ -135,7 +135,9 @@ The formula engine (Phase 1C) reads from `calculated_kpis.kpis.aggregate`. These
 - `hasMatchedMatter` (false = orphaned), `lawyerGrade`, `lawyerPayModel`
 - `ageInDays`, `weekNumber`, `monthKey`
 
-## Phase 1C: Formula Engine (current phase)
+## Phase 1C: Formula Engine (complete)
+
+Phase 1C complete — Formula Engine, 23 formulas, 5 snippets, custom executor, 10 templates, AI translation, sandbox, orchestration API, formula intelligence API. 1020 tests passing. Committed and pushed.
 
 ### Architecture
 - Formulas are pure functions: f(data, config) → result. No DB calls inside formulas.
