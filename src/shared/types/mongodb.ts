@@ -63,7 +63,7 @@ export interface HistoricalSnapshotDocument {
   _id?: ObjectId;
   firm_id: string;
   snapshot_date: Date;
-  period: 'weekly' | 'monthly' | 'quarterly' | 'annual';
+  period: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'annual';
   firm_summary: Record<string, unknown>;
   created_at?: Date;
 }
@@ -101,6 +101,12 @@ export interface RecalculationFlagDocument {
   firm_id: string;
   is_stale: boolean;
   stale_since: Date;
+  /** True while a calculation is actively running in a Netlify Function. */
+  is_calculating?: boolean;
+  /** Last calculation error message, if the previous run failed. */
+  last_error?: string;
+  /** Timestamp of the last calculation error. */
+  last_error_at?: Date;
 }
 
 // cross_reference_registries — one document per firm, upserted on every pipeline run

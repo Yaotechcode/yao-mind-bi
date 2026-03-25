@@ -407,7 +407,72 @@ export async function clearRecalculationFlag(firmId: string): Promise<void> {
   const col = await getCollection<RecalculationFlagDocument>('recalculation_flags');
   await col.replaceOne(
     { firm_id: firmId },
-    { firm_id: firmId, is_stale: false, stale_since: new Date() },
+    { firm_id: firmId, is_stale: false, stale_since: new Date(), is_calculating: false },
     { upsert: true }
   );
+}
+
+/**
+ * Mark that a calculation is actively running for a firm.
+ * Clears any previous error state. Call before starting the orchestrator.
+ */
+export async function setCalculationInProgress(firmId: string): Promise<void> {
+  const col = await getCollection<RecalculationFlagDocument>('recalculation_flags');
+  const existing = await col.findOne({ firm_id: firmId });
+  await col.replaceOne(
+    { firm_id: firmId },
+    {
+      firm_id: firmId,
+      is_stale: existing?.is_stale ?? true,
+      stale_since: existing?.stale_since ?? new Date(),
+      is_calculating: true,
+      last_error: undefined,
+      last_error_at: undefined,
+    },
+    { upsert: true }
+  );
+}
+
+/**
+ * Record a calculation failure for a firm.
+ * Sets is_stale back to true and stores the error message.
+ */
+export async function setCalculationError(firmId: string, error: string): Promise<void> {
+  const col = await getCollection<RecalculationFlagDocument>('recalculation_flags');
+  await col.replaceOne(
+    { firm_id: firmId },
+    {
+      firm_id: firmId,
+      is_stale: true,
+      stale_since: new Date(),
+      is_calculating: false,
+      last_error: error,
+      last_error_at: new Date(),
+    },
+    { upsert: true }
+  );
+}
+
+/**
+ * Check whether a daily historical snapshot already exists for today.
+ * Uses UTC date boundaries to prevent duplicate daily snapshots.
+ */
+export async function getTodayHistoricalSnapshot(
+  firmId: string,
+): Promise<HistoricalSnapshotDocument | null> {
+  const col = await getCollection<HistoricalSnapshotDocument>('historical_snapshots');
+  const startOfDay = new Date();
+  startOfDay.setUTCHours(0, 0, 0, 0);
+  const endOfDay = new Date();
+  endOfDay.setUTCHours(23, 59, 59, 999);
+
+  const results = await col
+    .find({
+      firm_id: firmId,
+      period: 'daily',
+      snapshot_date: { $gte: startOfDay, $lte: endOfDay },
+    })
+    .limit(1)
+    .toArray();
+  return results[0] ?? null;
 }
