@@ -594,7 +594,7 @@ export const clientProfitability: FormulaImplementation = {
         0,
       );
 
-      if (revenue === 0 && labourCost === 0) {
+      if (revenue === 0 && labourCost === 0 && disbursementLeakage === 0) {
         const reason = 'No financial data';
         nullReasons.add(reason);
         entityResults[entityId] = {

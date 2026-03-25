@@ -581,6 +581,14 @@ export const disbursementRecovery: FormulaImplementation = {
 // F-WL-04: Lock-Up Days
 // =============================================================================
 
+// DEVIATION FROM SPEC: The formula spec defines lockUpDays as a stock/flow ratio:
+//   (wipTotalBillable + invoicedOutstanding) / (invoicedNetBilling / 365)
+// This implementation uses avgWipAgeInDays + avgDebtorDaysOutstanding (average-of-ages
+// approach), which is more intuitive for daily operational monitoring. However, it will
+// under-represent lock-up when orphaned WIP is high (~49% in current data) because
+// orphaned time entries (hasMatchedMatter = false) are excluded from the average.
+// A future variant 'stock_flow_ratio' should implement the spec formula once data
+// completeness improves and orphan rates decrease.
 export const lockUpDays: FormulaImplementation = {
   formulaId: 'F-WL-04',
 
@@ -611,7 +619,11 @@ export const lockUpDays: FormulaImplementation = {
     let debtorLockUpDays = 0;
 
     if (activeVariant === 'from_payment_date') {
-      // Check if datePaid is available on any invoice
+      // TODO: from_payment_date variant — implement actual payment-date path when
+      // datePaid is available in the invoice export (currently absent from the
+      // Metabase query). See CLAUDE.md "Known data characteristics: datePaid not
+      // yet in invoice data". Until then, both branches fall back to daysOutstanding
+      // (same as from_due_date) to avoid producing silently incorrect results.
       const hasDatPaid = context.invoices.some(
         (inv) => dynField<unknown>(inv, 'datePaid') !== null,
       );
@@ -619,12 +631,9 @@ export const lockUpDays: FormulaImplementation = {
         warnings.push(
           'datePaid field not available — falling back to from_due_date variant for debtor days',
         );
-        // Fall through to from_due_date logic
-        debtorLockUpDays = computeDebtorDays(unpaidInvoices, 'daysOutstanding');
-      } else {
-        // For resolved invoices use actual payment days; unpaid use daysOutstanding
-        debtorLockUpDays = computeDebtorDays(unpaidInvoices, 'daysOutstanding');
       }
+      // Both paths use daysOutstanding until datePaid is populated.
+      debtorLockUpDays = computeDebtorDays(unpaidInvoices, 'daysOutstanding');
     } else if (activeVariant === 'from_invoice_date') {
       // daysOutstanding computed from invoice date in the pipeline
       // We fall back to the same field since daysOutstanding is from due date

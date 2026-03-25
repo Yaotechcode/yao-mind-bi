@@ -299,15 +299,12 @@ export const feeEarnerScorecard: FormulaImplementation = {
             ? (fe.wipChargeableHours / annualChargeableTarget) * 100
             : null;
       }
+      // F-TU-01 already returns utilisation as a percentage (0–100+). Clamp to 0–100
+      // for the scorecard. When unavailable, use a neutral mid-point of 50.
       const utilisationScore =
         utilisationRaw !== null
-          ? clamp((utilisationRaw / (chargeableTarget > 0 ? 100 : 1)) * 100, 0, 100)
+          ? clamp(utilisationRaw, 0, 100)
           : (warnings.push(`${entityName}: utilisation unavailable — using neutral score`), 50);
-
-      // When utilisation is already a % of target (F-TU-01 returns %),
-      // cap at 100 directly
-      const utilisationScoreFinal =
-        utilisationRaw !== null ? clamp(utilisationRaw, 0, 100) : utilisationScore;
 
       // ---- Realisation score ----
       // Use F-RB-01 firm-level realisation as proxy (per-earner not computed)
@@ -369,7 +366,7 @@ export const feeEarnerScorecard: FormulaImplementation = {
         weights.wipAgeWeight;
 
       const weightedScore =
-        (utilisationScoreFinal * weights.utilisationWeight +
+        (utilisationScore * weights.utilisationWeight +
           realisationScore * weights.realisationWeight +
           recordingScore * weights.recordingWeight +
           writeOffScore * weights.writeOffWeight +
@@ -388,7 +385,7 @@ export const feeEarnerScorecard: FormulaImplementation = {
         breakdown: {
           components: {
             utilisation: {
-              score: utilisationScoreFinal,
+              score: utilisationScore,
               weight: weights.utilisationWeight,
               raw: utilisationRaw,
             },
