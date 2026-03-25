@@ -274,6 +274,77 @@ Templates are cloneable and editable. Wizard creates from scratch; template clon
 4. **When should it run?** — set data requirements and null handling
 5. **Review & confirm** — AI plain-English translation, preview against sample data
 
+### Phase 1C Implementation (complete)
+
+**Engine components built:**
+
+- `FormulaEngine` — core executor: registers snippets, runs readiness checks, executes built-in and custom formulas in dependency order
+- `ReadinessChecker` — evaluates `FORMULA_INPUT_REQUIREMENTS` against `DataAvailabilitySummary`; returns READY / PARTIAL / BLOCKED / ENHANCED per formula
+- `RagEngine` — applies `RagThreshold[]` config to formula results; `evaluateAll` uses `FORMULA_TO_METRIC` map, `evaluateSingle` for direct threshold lookup
+- `CustomFormulaExecutor` — validates and executes custom formula `Expression` objects (no `eval()`); `validate()` returns `referencedEntities` for readiness pre-check
+- `SnippetEngine` — executes SN-001 through SN-005 before formula execution; results available in `context.snippetResults`
+- `FormulaTranslator` — AI-assisted translation of formula definitions to plain English via Claude API; rate-limited (20 req/min); injectable HTTP client for testing
+- `FormulaSandbox` — read-only dry-run execution against real firm data without persisting results; supports `dryRun`, `diffWithLive`, `dryRunBatch`; injectable `SandboxDeps` for deterministic testing
+
+**Key architectural decisions made in Phase 1C:**
+
+- **Injectable deps over mocking** — `FormulaSandbox`, `FormulaTranslator`, and the rate limiter all accept injected dependencies so tests never hit real databases or external APIs
+- **Readiness before execution** — BLOCKED formulas never execute; the readiness check runs synchronously before any data is loaded
+- **Snippets always run** — even for PARTIAL formulas, all declared snippets run first so their results are available in `context.snippetResults`
+- **RAG is post-execution metadata** — the engine never uses RAG state to gate execution; assignments are metadata on the result, consumed by the UI
+- **Custom formulas use `Expression` node trees** — not `eval()` or template strings; the executor interprets `field`, `literal`, `operator`, `function` node types safely
+
+### Phase 1C File Map
+
+```
+src/shared/formulas/
+  formula-registry.ts           — 23 built-in formula definitions + 5 snippet definitions
+  formula-types.ts              — FormulaDefinition, SnippetDefinition, FormulaResult,
+                                  FormulaReadinessResult, RagThreshold, etc.
+  custom-formula-types.ts       — CustomFormulaDefinition, Expression, ExpressionNode types
+
+src/server/formula-engine/
+  engine/
+    formula-engine.ts           — FormulaEngine: registerSnippet, execute, executeAll
+    snippet-engine.ts           — SnippetEngine: registers and runs SN-001 to SN-005
+    readiness-checker.ts        — ReadinessChecker: FORMULA_INPUT_REQUIREMENTS map,
+                                  checkSingleReadiness, DataAvailabilitySummary
+    rag-engine.ts               — RagEngine: evaluateAll (FORMULA_TO_METRIC), evaluateSingle
+  formulas/
+    utilisation.ts              — F-TU-01 through F-TU-03 (time utilisation)
+    wip-leakage.ts              — F-WL-01 through F-WL-04 (WIP & lock-up)
+    profitability.ts            — F-PR-01 through F-PR-04 (profitability)
+    composites.ts               — F-CS-01 through F-CS-03 (composite scorecard)
+  snippets/
+    sn-001-annual-salary.ts     — SN-001: annualised salary from config
+    sn-002-cost-rate.ts         — SN-002: hourly cost rate (salary ÷ working hours)
+    sn-003-realisation.ts       — SN-003: firm-level realisation rate
+    sn-004-total-cost.ts        — SN-004: total cost including overhead allocation
+    sn-005-pay-model.ts         — SN-005: pay model branching (salaried vs fee share)
+  custom/
+    custom-formula-executor.ts  — CustomFormulaExecutor: validate() + execute()
+  ai/
+    formula-translator.ts       — FormulaTranslator: plain-English translation via Claude,
+                                  in-memory rate limiter, injectable HTTP client
+  sandbox/
+    formula-sandbox.ts          — FormulaSandbox: dryRun, diffWithLive, dryRunBatch,
+                                  injectable SandboxDeps
+
+src/server/functions/
+  formula-sandbox.ts            — Netlify Function: POST /api/formula-sandbox/{run,diff,batch}
+  formula-translator.ts         — Netlify Function: POST /api/formula-translator/translate
+  calculated-kpis.ts            — Netlify Function: GET /api/calculated-kpis
+  formula-library.ts            — Netlify Function: GET /api/formula-library
+  rag-thresholds.ts             — Netlify Function: GET/PUT /api/rag-thresholds
+
+tests/server/formula-engine/
+  engine/                       — FormulaEngine, ReadinessChecker, RagEngine tests
+  formulas/                     — utilisation, wip-leakage, profitability, composites tests
+  custom/                       — CustomFormulaExecutor tests
+  ai/                           — FormulaTranslator tests (includes rate limiter, few-shot examples)
+  sandbox/                      — FormulaSandbox tests (22 tests)
+```
+
 ---
 
 ## 8. Data Pipeline

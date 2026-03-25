@@ -135,6 +135,23 @@ The formula engine (Phase 1C) reads from `calculated_kpis.kpis.aggregate`. These
 - `hasMatchedMatter` (false = orphaned), `lawyerGrade`, `lawyerPayModel`
 - `ageInDays`, `weekNumber`, `monthKey`
 
+## Phase 1C: Formula Engine (current phase)
+
+### Architecture
+- Formulas are pure functions: f(data, config) → result. No DB calls inside formulas.
+- Snippets execute BEFORE formulas (dependency order). Results available via context.snippetResults.
+- Readiness checker runs BEFORE execution: BLOCKED formulas never execute, PARTIAL formulas flag missing inputs.
+- Every formula result carries metadata: computedAt, variantUsed, nullReasons, breakdown.
+- Formula versions tracked in formula_versions table (migration 003). KPI documents reference version snapshot.
+
+### Field names from pipeline (formulas MUST use these exact names)
+- AggregatedFeeEarner: wipTotalHours, wipChargeableHours, wipNonChargeableHours, wipTotalBillable, wipTotalWriteOff, invoicedNetBilling, invoicedTotal, invoicedOutstanding, invoicedPaid, recordingGapDays, lastRecordedDate, orphanedWip.orphanedWipEntryCount, orphanedWip.orphanedWipValue
+- AggregatedMatter: wipTotalBillable, wipTotalHours, wipTotalWriteOff, invoicedNetBilling, invoicedOutstanding, invoicedPaid, budget, isFixedFee, disbursementTotal, disbursementOutstanding
+- AggregatedFirm: firm-wide totals of all above
+
+### Prompt sequence (16 prompts)
+1C-01 → 1C-01b → 1C-01c → 1C-02 → 1C-03 → 1C-04 → 1C-05 → 1C-06 → 1C-07 → 1C-08 → 1C-09 → 1C-09b → 1C-09c → 1C-09d → 1C-10 → 1C-10b
+
 ### Dual source of truth
 
 Two independent data sources cover overlapping ground — their values will differ and must never be silently reconciled:
@@ -155,6 +172,41 @@ These are structural realities of the real firm data, not bugs. Formulas must ha
 **`datePaid` not yet in invoice data** — the current invoice export does not include a payment date. This field has `missingBehaviour: 'degrade'` in the entity registry. Any formula that calculates cash collection speed or aged debt will run in PARTIAL/BLOCKED readiness until `datePaid` is populated. Design those formulas to return null gracefully when `datePaid` is absent.
 
 **`lawyerGrade` depends on fee earner CSV** — `lawyerGrade` and `lawyerPayModel` on `EnrichedTimeEntry` records are populated from the fee earner CSV file. If that file has not been uploaded, both fields are null on every time entry. Grade-dependent formulas (utilisation targets, cost rate by grade) will be BLOCKED until the fee earner file is present.
+
+### Known data gaps
+
+These fields are structurally absent from the current Metabase exports. Any formula that depends on them will run at PARTIAL or BLOCKED readiness until the query is updated:
+
+- **`datePaid` absent from invoice export** — F-WL-04 `from_payment_date` variant falls back to `daysOutstanding`; aged debt formulas cannot compute actual days-to-payment. Fix: add `Date Paid` to the Metabase invoice query.
+- **~49% WIP orphan rate** — F-WL-04 average-of-ages under-represents lock-up because orphaned time entries (no matched matter) are excluded from the per-matter WIP age average. Fix: upload both WIP and Full Matters so the cross-reference registry can resolve `matterId` ↔ `matterNumber`.
+- **`activityType` absent from WIP export** — F-TU-03 (non-chargeable breakdown) cannot sub-categorise time by activity. Fix: add `Activity Type` to the Metabase WIP query (future Metabase schema extension).
+- **Client IDs absent from matters export** — matter → client joins use `responsibleLawyer` name string, which is fragile (name variations cause missed joins). Fix: add Client ID column to Full Matters Metabase query.
+
+### Known limitations
+
+Implementation-level constraints to be aware of:
+
+- **Rate limiter is in-memory only** — the AI formula-translator rate limiter resets on each cold-start. Under concurrent invocations (multiple Netlify instances), the per-minute limit can be exceeded. Acceptable for MVP; fix with Redis or Supabase counter before multi-firm production.
+- **F-CS-02 uses firm-level realisation as per-earner proxy** — the composite scorecard uses the firm's overall realisation rate as a proxy for each fee earner's realisation score when per-earner data is unavailable. This overestimates high-billing earners and underestimates low-billing ones.
+- **SN-001 and SN-004 compute annual cost independently** — annual salary (SN-001) and total cost including overhead (SN-004) are computed by separate snippets without cross-validation. If overhead config changes between snippet executions (unlikely but possible), the two snippets may use different effective rates.
+- **F-WL-04 uses average-of-ages, not stock/flow ratio** — see deliberate deviations below.
+
+### Deliberate deviations from spec
+
+Where the implementation intentionally differs from the formula specification:
+
+- **F-WL-04 Lock-Up (average-of-ages vs stock/flow ratio)** — the spec defines lock-up days as `(wipTotalBillable + invoicedOutstanding) / (invoicedNetBilling / 365)` (stock/flow ratio). The implementation uses `avgWipAgeInDays + avgDebtorDaysOutstanding` (average-of-ages), which is more intuitive for daily operational monitoring but under-represents lock-up when the orphan rate is high. A future variant `stock_flow_ratio` should implement the spec formula once orphan rates decrease. See comment in `src/server/formula-engine/formulas/wip-leakage.ts`.
+
+### Metabase query fixes needed
+
+The following changes to Metabase queries will unlock currently PARTIAL/BLOCKED formulas:
+
+| Priority | Query | Change needed | Formulas unlocked |
+|----------|-------|---------------|-------------------|
+| High | Invoices | Add `Date Paid` column | F-WL-04 `from_payment_date`, aged debt analysis |
+| High | Full Matters | Add Client ID column | Client → matter joins |
+| High | Full Matters | Remove status filter (if any) — include all statuses | Cross-reference completeness |
+| Medium | WIP (Lawyer Time) | Add `Activity Type` column | F-TU-03 non-chargeable breakdown |
 
 ---
 
