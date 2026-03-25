@@ -13,6 +13,12 @@ import {
   recordingConsistency,
   nonChargeableBreakdown,
 } from './utilisation.js';
+import {
+  realisationRate,
+  effectiveHourlyRate,
+  revenuePerFeeEarner,
+  billingVelocity,
+} from './revenue.js';
 
 /**
  * Register all built-in formula implementations with the engine.
@@ -23,4 +29,10 @@ export function registerAllBuiltInFormulas(engine: FormulaEngine): void {
   engine.registerFormula('F-TU-01', chargeableUtilisationRate);
   engine.registerFormula('F-TU-02', recordingConsistency);
   engine.registerFormula('F-TU-03', nonChargeableBreakdown);
+
+  // Revenue & Billing (1C-03)
+  engine.registerFormula('F-RB-01', realisationRate);
+  engine.registerFormula('F-RB-02', effectiveHourlyRate);
+  engine.registerFormula('F-RB-03', revenuePerFeeEarner);
+  engine.registerFormula('F-RB-04', billingVelocity);
 }
