@@ -237,6 +237,27 @@ describe('getWipData', () => {
     const result = await getWipData(FIRM_ID);
     expect(result.disbursementExposure.totalExposure).toBe(0);
   });
+
+  it('respects custom writeOffRate threshold from firm config', async () => {
+    // Custom config: RED threshold starts at 15% instead of default 10%
+    vi.mocked(configService.getFirmConfig).mockResolvedValue({
+      ...makeFirmConfig(),
+      ragThresholds: [{
+        metricKey: 'writeOffRate',
+        label: 'Write-off Rate',
+        higherIsBetter: false,
+        defaults: { green: { max: 8 }, amber: { min: 8, max: 15 }, red: { min: 15 } },
+      }],
+    } as never);
+    // makeMatter has wipTotalBillable: 2000, wipTotalWriteOff: 100 → 5% write-off → GREEN
+    // Override to produce 12% write-off (above old 10% red threshold, below new 15%)
+    const doc = makeKpisDoc();
+    (doc.kpis.aggregate.matters as ReturnType<typeof makeMatter>[])[0].wipTotalWriteOff = 240; // 12% of 2000
+    vi.mocked(mongoOps.getLatestCalculatedKpis).mockResolvedValue(doc as never);
+    const result = await getWipData(FIRM_ID);
+    // 12% is above amber min (8) but below red min (15) → AMBER, not RED
+    expect(result.writeOffAnalysis.ragStatus).toBe('amber');
+  });
 });
 
 // ── getBillingCollectionsData ──────────────────────────────────────────────

@@ -16,6 +16,7 @@ import type {
   BillingPayload, MatterPayload, ClientPayload, MatterRow,
 } from '../../shared/types/dashboard-payloads.js';
 import { RagStatus } from '../../shared/types/index.js';
+import type { RagThresholdSet } from '../../shared/types/index.js';
 import { getLatestCalculatedKpis, getLatestEnrichedEntities } from '../lib/mongodb-operations.js';
 import { getFirmConfig } from './config-service.js';
 
@@ -143,6 +144,52 @@ function lastNWorkingDays(n: number): string[] {
     }
   }
   return days;
+}
+
+// ---------------------------------------------------------------------------
+// RAG threshold helpers
+// ---------------------------------------------------------------------------
+
+type ThresholdDefaults = RagThresholdSet['defaults'];
+
+/** Hardcoded fallbacks used when a metricKey isn't present in firm config. */
+const FALLBACK_THRESHOLDS: Record<string, ThresholdDefaults> = {
+  wipAge: {
+    [RagStatus.GREEN]: { max: 15 },
+    [RagStatus.AMBER]: { min: 15, max: 30 },
+    [RagStatus.RED]:   { min: 30 },
+  },
+  writeOffRate: {
+    [RagStatus.GREEN]: { max: 5 },
+    [RagStatus.AMBER]: { min: 5, max: 10 },
+    [RagStatus.RED]:   { min: 10 },
+  },
+  budgetBurn: {
+    [RagStatus.GREEN]: { max: 80 },
+    [RagStatus.AMBER]: { min: 80, max: 100 },
+    [RagStatus.RED]:   { min: 100 },
+  },
+};
+
+/** Look up threshold defaults from firm config by metricKey, falling back to hardcoded values. */
+function getThresholdDefaults(ragThresholds: RagThresholdSet[], metricKey: string): ThresholdDefaults {
+  const found = ragThresholds.find(t => t.metricKey === metricKey);
+  return found?.defaults ?? FALLBACK_THRESHOLDS[metricKey] ?? FALLBACK_THRESHOLDS['wipAge'];
+}
+
+/**
+ * Apply a threshold set to a value and return the matching RagStatus.
+ * Checks RED first (handles "higher is worse" and "higher is better" correctly
+ * as long as threshold ranges are mutually exclusive and contiguous).
+ */
+function applyRagThreshold(value: number, defaults: ThresholdDefaults): RagStatus {
+  const inRange = (t: { min?: number; max?: number }) =>
+    (t.min === undefined || value >= t.min) && (t.max === undefined || value < t.max);
+
+  if (inRange(defaults[RagStatus.RED]))   return RagStatus.RED;
+  if (inRange(defaults[RagStatus.AMBER])) return RagStatus.AMBER;
+  if (inRange(defaults[RagStatus.GREEN])) return RagStatus.GREEN;
+  return RagStatus.NEUTRAL;
 }
 
 // ---------------------------------------------------------------------------
@@ -411,8 +458,9 @@ export async function getWipData(
   firmId: string,
   filters: DashboardFilters = {},
 ): Promise<WipPayload> {
-  const data = await loadDashboardData(firmId);
+  const [data, firmConfig] = await Promise.all([loadDashboardData(firmId), getFirmConfig(firmId)]);
   const { matters, timeEntries, disbursements, enrichedMatters } = data;
+  const ragThresholds = firmConfig.ragThresholds ?? [];
 
   const enrichedMatterMap = new Map<string, Record<string, unknown>>();
   for (const em of enrichedMatters) {
@@ -552,7 +600,7 @@ export async function getWipData(
   return {
     headlines: {
       totalUnbilledWip: { value: totalUnbilledWip, grossValue: totalUnbilledWip + totalWriteOff, netValue: totalUnbilledWip },
-      atRisk: { value: atRiskValue, percentage: atRiskPct, ragStatus: atRiskPct > 30 ? RagStatus.RED : atRiskPct > 15 ? RagStatus.AMBER : RagStatus.GREEN },
+      atRisk: { value: atRiskValue, percentage: atRiskPct, ragStatus: applyRagThreshold(atRiskPct, getThresholdDefaults(ragThresholds, 'wipAge')) },
       estimatedLeakage: { value: Math.round(atRiskValue * 0.3), methodology: 'average-of-ages × 30% loss rate for 61+ day WIP' },
     },
     ageBands,
@@ -562,7 +610,7 @@ export async function getWipData(
     writeOffAnalysis: {
       totalWriteOff,
       writeOffRate,
-      ragStatus: writeOffRate > 10 ? RagStatus.RED : writeOffRate > 5 ? RagStatus.AMBER : RagStatus.GREEN,
+      ragStatus: applyRagThreshold(writeOffRate, getThresholdDefaults(ragThresholds, 'writeOffRate')),
       byFeeEarner: [],
       byCaseType: [],
     },
@@ -719,8 +767,9 @@ export async function getMatterAnalysisData(
   firmId: string,
   filters: DashboardFilters = {},
 ): Promise<MatterPayload> {
-  const data = await loadDashboardData(firmId);
+  const [data, firmConfig] = await Promise.all([loadDashboardData(firmId), getFirmConfig(firmId)]);
   const { matters, enrichedMatters, timeEntries, invoices, formulaResults, ragAssignments } = data;
+  const ragThresholds = firmConfig.ragThresholds ?? [];
 
   const enrichedMatterMap = new Map<string, Record<string, unknown>>();
   for (const em of enrichedMatters) {
@@ -815,7 +864,7 @@ export async function getMatterAnalysisData(
       unbilledBalance: m.wipTotalBillable - m.invoicedNetBilling,
       wipAge: m.wipAgeInDays,
       budgetBurn,
-      budgetBurnRag: budgetBurn !== null ? (budgetBurn > 100 ? RagStatus.RED : budgetBurn > 80 ? RagStatus.AMBER : RagStatus.GREEN) : null,
+      budgetBurnRag: budgetBurn !== null ? applyRagThreshold(budgetBurn, getThresholdDefaults(ragThresholds, 'budgetBurn')) : null,
       realisation,
       realisationRag: getRag(ragAssignments, 'F-RB-01', m.matterId ?? m.matterNumber ?? ''),
       healthScore,
