@@ -14,17 +14,8 @@
     "moduleResolution": "bundler",
     "outDir": "dist",
     "paths": {
-      "./@/*": [
+      "@/*": [
         "./src/*"
-      ],
-      "./@client/*": [
-        "./src/client/*"
-      ],
-      "./@server/*": [
-        "./src/server/*"
-      ],
-      "./@shared/*": [
-        "./src/shared/*"
       ]
     },
     "resolveJsonModule": true,
