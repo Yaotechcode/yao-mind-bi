@@ -77,9 +77,9 @@ export interface CustomEntityRecordDocument {
   updated_at: Date;
 }
 
-// normalised_datasets — one upserted document per (firm_id, file_type)
-// Stores normalised records so subsequent uploads can incorporate prior data
-// into cross-reference building without re-parsing raw files.
+// normalised_datasets — one document per (firm_id, file_type, chunk_index)
+// Large datasets are split into 5000-record chunks to stay under MongoDB's
+// 16MB document limit. Callers reassemble chunks ordered by chunk_index.
 export interface NormalisedDatasetDocument {
   _id?: ObjectId;
   firm_id: string;
@@ -92,6 +92,10 @@ export interface NormalisedDatasetDocument {
   records: Record<string, unknown>[];
   record_count: number;
   normalised_at: Date;
+  /** Zero-based chunk index within this file_type dataset */
+  chunk_index: number;
+  /** Total number of chunks for this file_type dataset */
+  total_chunks: number;
 }
 
 // recalculation_flags — one document per firm_id
