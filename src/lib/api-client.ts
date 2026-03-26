@@ -252,13 +252,12 @@ export async function uploadFile(
 }
 
 export interface UploadStatusEntry {
-  _id: string;
-  file_type: string;
-  original_filename: string;
-  upload_date: string;
-  record_count: number;
-  status: 'pending' | 'processing' | 'processed' | 'error' | 'deleted';
-  error_message?: string;
+  fileType: string;
+  label: string;
+  recordCount: number | null;
+  uploadedAt: string | null;
+  uploadId: string | null;
+  status: 'loaded' | 'not_loaded';
 }
 
 export async function fetchUploadStatus(limit = 20): Promise<UploadStatusEntry[]> {
