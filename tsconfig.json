@@ -28,9 +28,17 @@
   "exclude": [
     "node_modules",
     "dist",
-    "tests"
+    "tests",
+    "src/server"
   ],
   "include": [
-    "src/**/*"
+    "src/components/**/*",
+    "src/pages/**/*",
+    "src/hooks/**/*",
+    "src/providers/**/*",
+    "src/lib/**/*",
+    "src/styles/**/*",
+    "src/shared/**/*",
+    "src/client/**/*"
   ]
 }
