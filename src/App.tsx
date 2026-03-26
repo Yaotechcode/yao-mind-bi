@@ -4,16 +4,28 @@ import { Toaster } from 'sonner';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
 import { ConfigProvider } from '@/providers/ConfigProvider';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import HelpQueriesPage from './pages/HelpQueries';
-import HelpQueryDetailPage from './pages/HelpQueryDetail';
-import NewHelpQueryPage from './pages/NewHelpQuery';
+
+// Auth pages
+import LoginPage from '@/pages/LoginPage';
+import RegisterPage from '@/pages/RegisterPage';
+import ForgotPasswordPage from '@/pages/ForgotPasswordPage';
+import ResetPasswordPage from '@/pages/ResetPasswordPage';
+
+// Layout
+import DashboardLayout from '@/components/layout/DashboardLayout';
+import { DashboardPlaceholder } from '@/components/layout/DashboardPlaceholder';
+
+// Help pages (existing)
+import HelpQueriesPage from '@/pages/HelpQueries';
+import HelpQueryDetailPage from '@/pages/HelpQueryDetail';
+import NewHelpQueryPage from '@/pages/NewHelpQuery';
 
 // ── Query client ──────────────────────────────────────────────────────────────
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 5 * 60 * 1000,   // 5 minutes
+      staleTime: 5 * 60 * 1000,
       retry: 1,
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
@@ -34,7 +46,22 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!user) return <Navigate to="/auth" replace />;
+  if (!user) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
+
+function PublicOnlyRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="animate-pulse text-primary text-sm font-medium">Loading…</div>
+      </div>
+    );
+  }
+
+  if (user) return <Navigate to="/dashboard" replace />;
   return <>{children}</>;
 }
 
@@ -43,63 +70,47 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function AppRoutes() {
   return (
     <Routes>
-      {/* Root → redirect to help (adjust when dashboard exists) */}
-      <Route path="/" element={<Navigate to="/help" replace />} />
+      {/* Root → redirect to dashboard */}
+      <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
-      {/* Help & Queries */}
-      <Route
-        path="/help"
-        element={
-          <ProtectedRoute>
-            <HelpQueriesPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/help/new"
-        element={
-          <ProtectedRoute>
-            <NewHelpQueryPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/help/:id"
-        element={
-          <ProtectedRoute>
-            <HelpQueryDetailPage />
-          </ProtectedRoute>
-        }
-      />
+      {/* Public auth routes */}
+      <Route path="/login" element={<PublicOnlyRoute><LoginPage /></PublicOnlyRoute>} />
+      <Route path="/register" element={<PublicOnlyRoute><RegisterPage /></PublicOnlyRoute>} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
 
-      {/* Placeholder: auth page (to be built) */}
-      <Route
-        path="/auth"
-        element={
-          <div className="min-h-screen flex items-center justify-center bg-background">
-            <p className="text-muted-foreground text-sm">Auth page — coming soon</p>
-          </div>
-        }
-      />
+      {/* Legacy auth route redirect */}
+      <Route path="/auth" element={<Navigate to="/login" replace />} />
 
-      {/* Dashboard placeholder */}
+      {/* Protected dashboard routes */}
       <Route
-        path="/dashboard"
         element={
           <ProtectedRoute>
-            <div className="min-h-screen flex items-center justify-center bg-background">
-              <p className="text-muted-foreground text-sm">Dashboard — coming soon</p>
-            </div>
+            <DashboardLayout />
           </ProtectedRoute>
         }
-      />
+      >
+        <Route path="/dashboard" element={<DashboardPlaceholder title="Firm Overview" />} />
+        <Route path="/fee-earners" element={<DashboardPlaceholder title="Fee Earner Performance" />} />
+        <Route path="/wip" element={<DashboardPlaceholder title="Work in Progress" />} />
+        <Route path="/billing" element={<DashboardPlaceholder title="Billing & Collections" />} />
+        <Route path="/matters" element={<DashboardPlaceholder title="Matter Analysis" />} />
+        <Route path="/clients" element={<DashboardPlaceholder title="Client Intelligence" />} />
+        <Route path="/settings" element={<DashboardPlaceholder title="Settings" />} />
+        <Route path="/data" element={<DashboardPlaceholder title="Data Management" />} />
+
+        {/* Help routes inside layout */}
+        <Route path="/help" element={<HelpQueriesPage />} />
+        <Route path="/help/new" element={<NewHelpQueryPage />} />
+        <Route path="/help/:id" element={<HelpQueryDetailPage />} />
+      </Route>
 
       {/* 404 */}
       <Route
         path="*"
         element={
           <div className="min-h-screen flex items-center justify-center bg-background">
-            <p className="text-muted-foreground text-sm">Page not found</p>
+            <p className="text-sm text-muted-foreground">Page not found</p>
           </div>
         }
       />
