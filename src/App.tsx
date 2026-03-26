@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
+import { ConfigProvider } from '@/providers/ConfigProvider';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import HelpQueriesPage from './pages/HelpQueries';
 import HelpQueryDetailPage from './pages/HelpQueryDetail';
@@ -115,7 +116,9 @@ export default function App() {
         <Toaster richColors position="top-right" />
         <BrowserRouter>
           <AuthProvider>
-            <AppRoutes />
+            <ConfigProvider>
+              <AppRoutes />
+            </ConfigProvider>
           </AuthProvider>
         </BrowserRouter>
       </TooltipProvider>
