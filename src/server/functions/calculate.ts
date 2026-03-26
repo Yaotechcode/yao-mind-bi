@@ -74,7 +74,10 @@ const BASE = '/api/calculate';
 
 function segment(path: string): string {
   const clean = path.replace(/\/$/, '');
-  return clean.startsWith(BASE) ? clean.slice(BASE.length + 1) : '';
+  const netlifyMatch = clean.match(/\/\.netlify\/functions\/calculate\/?(.*)$/);
+  if (netlifyMatch) return netlifyMatch[1] ?? '';
+  if (clean.startsWith(BASE)) return clean.slice(BASE.length + 1);
+  return '';
 }
 
 // ---------------------------------------------------------------------------

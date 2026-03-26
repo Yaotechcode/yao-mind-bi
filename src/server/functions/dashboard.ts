@@ -28,7 +28,10 @@ const BASE = '/api/dashboard';
 
 function routeSegment(path: string): string {
   const clean = path.replace(/\/$/, '');
-  return clean.startsWith(BASE) ? clean.slice(BASE.length + 1) : '';
+  const netlifyMatch = clean.match(/\/\.netlify\/functions\/dashboard\/?(.*)$/);
+  if (netlifyMatch) return netlifyMatch[1] ?? '';
+  if (clean.startsWith(BASE)) return clean.slice(BASE.length + 1);
+  return '';
 }
 
 function parseFilters(qs: Record<string, string | undefined> | null): DashboardFilters {
