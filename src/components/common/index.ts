@@ -40,3 +40,5 @@ export type { DashboardSectionProps } from './DashboardSection';
 
 export { SortableTable } from './SortableTable';
 export type { SortableTableProps, ColumnDef } from './SortableTable';
+
+export { DashboardSkeleton, KpiCardSkeleton, ChartSkeleton, TableSkeleton } from './DashboardSkeleton';

@@ -14,6 +14,7 @@ import ResetPasswordPage from '@/pages/ResetPasswordPage';
 // Layout
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { DashboardPlaceholder } from '@/components/layout/DashboardPlaceholder';
+import FirmOverviewPage from '@/pages/FirmOverviewPage';
 
 // Help pages (existing)
 import HelpQueriesPage from '@/pages/HelpQueries';
@@ -90,7 +91,7 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       >
-        <Route path="/dashboard" element={<DashboardPlaceholder title="Firm Overview" />} />
+        <Route path="/dashboard" element={<FirmOverviewPage />} />
         <Route path="/fee-earners" element={<DashboardPlaceholder title="Fee Earner Performance" />} />
         <Route path="/wip" element={<DashboardPlaceholder title="Work in Progress" />} />
         <Route path="/billing" element={<DashboardPlaceholder title="Billing & Collections" />} />
