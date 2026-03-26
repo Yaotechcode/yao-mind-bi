@@ -40,7 +40,7 @@ interface DatasetStatus {
   recordCount: number | null;
   uploadedAt: string | null;
   uploadId: string | null;
-  status: 'loaded' | 'not_loaded';
+  status: 'loaded' | 'processing' | 'not_loaded';
 }
 
 // ---------------------------------------------------------------------------
@@ -86,30 +86,48 @@ export const handler: Handler = async (event) => {
     // Fetch enough history to cover at least one entry per dataset type
     const history = await getUploadHistory(firmId, Math.max(limit, DATASETS.length * 3));
 
-    // Pick the most recent processed upload per fileType (history is already newest-first)
-    const latestByType = new Map<string, typeof history[number]>();
+    // Pick the most recent upload per fileType — prefer 'processed', fall back to 'processing'
+    const latestProcessedByType = new Map<string, typeof history[number]>();
+    const latestProcessingByType = new Map<string, typeof history[number]>();
     for (const upload of history) {
-      if (upload.status !== 'processed') continue;
-      if (!latestByType.has(upload.file_type)) {
-        latestByType.set(upload.file_type, upload);
+      if (upload.status === 'processed' && !latestProcessedByType.has(upload.file_type)) {
+        latestProcessedByType.set(upload.file_type, upload);
+      }
+      if (upload.status === 'processing' && !latestProcessingByType.has(upload.file_type)) {
+        latestProcessingByType.set(upload.file_type, upload);
       }
     }
 
     const result: DatasetStatus[] = DATASETS.map(({ fileType, label }) => {
-      const doc = latestByType.get(fileType);
-      if (!doc) {
-        return { fileType, label, recordCount: null, uploadedAt: null, uploadId: null, status: 'not_loaded' };
+      const processed = latestProcessedByType.get(fileType);
+      if (processed) {
+        return {
+          fileType,
+          label,
+          recordCount: processed.record_count,
+          uploadedAt: processed.upload_date instanceof Date
+            ? processed.upload_date.toISOString()
+            : new Date(processed.upload_date).toISOString(),
+          uploadId: processed._id ? String(processed._id) : null,
+          status: 'loaded',
+        };
       }
-      return {
-        fileType,
-        label,
-        recordCount: doc.record_count,
-        uploadedAt: doc.upload_date instanceof Date
-          ? doc.upload_date.toISOString()
-          : new Date(doc.upload_date).toISOString(),
-        uploadId: doc._id ? String(doc._id) : null,
-        status: 'loaded',
-      };
+
+      const inProgress = latestProcessingByType.get(fileType);
+      if (inProgress) {
+        return {
+          fileType,
+          label,
+          recordCount: inProgress.record_count,
+          uploadedAt: inProgress.upload_date instanceof Date
+            ? inProgress.upload_date.toISOString()
+            : new Date(inProgress.upload_date).toISOString(),
+          uploadId: inProgress._id ? String(inProgress._id) : null,
+          status: 'processing',
+        };
+      }
+
+      return { fileType, label, recordCount: null, uploadedAt: null, uploadId: null, status: 'not_loaded' };
     });
 
     return {

@@ -267,6 +267,168 @@ const ENTITY_KEY_TO_ENUM: Record<string, EntityType> = {
 };
 
 // ---------------------------------------------------------------------------
+// normaliseUpload — Stage 2 only (synchronous, no DB calls)
+// Used by upload.ts phase-1 so it can return quickly.
+// ---------------------------------------------------------------------------
+
+export interface NormaliseUploadResult {
+  normaliseResult: NormaliseResult;
+  entityKey: string;
+  /** True when >50% of rows were rejected — caller should abort the upload. */
+  aborted: boolean;
+  abortReason?: string;
+  warnings: PipelineWarning[];
+}
+
+export function normaliseUpload(params: {
+  fileType: string;
+  parseResult: ParseResult;
+  mappingSet: ClientMappingSet;
+}): NormaliseUploadResult {
+  const { fileType, parseResult, mappingSet } = params;
+
+  const entityKey = FILE_TYPE_TO_ENTITY_KEY[fileType];
+  if (!entityKey) throw new Error(`Unknown fileType: ${fileType}`);
+
+  const entityTypeEnum = ENTITY_KEY_TO_ENUM[entityKey];
+  const entityDef = getBuiltInEntityDefinition(entityTypeEnum as EntityType);
+  if (!entityDef) throw new Error(`No entity definition for entityKey: ${entityKey}`);
+
+  const normaliserMappings: ColumnMapping[] = mappingSet.mappings
+    .filter(m => m.mappedTo !== null)
+    .map(m => ({ sourceColumn: m.rawColumn, targetField: m.mappedTo! }));
+
+  const normaliseResult = normaliseRecords(parseResult.fullRows, normaliserMappings, entityKey, entityDef);
+
+  const rejectedCount = normaliseResult.rejectedRows?.length ?? 0;
+  const totalCount = parseResult.fullRows.length;
+  const effectiveRejectedCount =
+    normaliseResult.records.length === 0 && totalCount > 0 ? totalCount : rejectedCount;
+  const rejectedPercent = totalCount > 0 ? (effectiveRejectedCount / totalCount) * 100 : 0;
+
+  const warnings: PipelineWarning[] = (normaliseResult.warnings ?? []).map(w => ({
+    stage: 'normalise' as const,
+    message: w.message,
+    severity: 'warning' as const,
+    count: w.affectedRowCount,
+  }));
+
+  if (rejectedPercent > 50) {
+    const reason = `${effectiveRejectedCount} of ${totalCount} rows rejected (${Math.round(rejectedPercent)}%) — exceeds 50% threshold`;
+    return { normaliseResult, entityKey, aborted: true, abortReason: reason, warnings };
+  }
+
+  return { normaliseResult, entityKey, aborted: false, warnings };
+}
+
+// ---------------------------------------------------------------------------
+// runPipelineFromStored — Stages 3–7 + persist (runs in background function)
+// Loads the normalised dataset from MongoDB and runs the full pipeline from
+// Stage 3 onwards. Intended to be called from process-upload-background.ts.
+// ---------------------------------------------------------------------------
+
+export async function runPipelineFromStored(params: {
+  firmId: string;
+  uploadId: string;
+  fileType: string;
+}): Promise<FullPipelineResult> {
+  const { firmId, uploadId, fileType } = params;
+  const startTime = Date.now();
+  const stagesCompleted: FullPipelineResult['stagesCompleted'] = [];
+  const warnings: PipelineWarning[] = [];
+
+  const entityKey = FILE_TYPE_TO_ENTITY_KEY[fileType];
+  if (!entityKey) throw new Error(`Unknown fileType: ${fileType}`);
+
+  // Load all normalised datasets for this firm (upload.ts has already stored ours)
+  const allDatasets = await getAllNormalisedDatasets(firmId);
+  if (!allDatasets[fileType]) {
+    throw new Error(`No normalised dataset found for fileType "${fileType}" — has upload.ts stored it?`);
+  }
+
+  // ── Stage 3: Cross-Reference ──────────────────────────────────────────────
+  const existingSerialised = await getCrossReferenceRegistry(firmId);
+  const existingRegistry = existingSerialised ? deserialiseRegistry(existingSerialised) : undefined;
+  const updatedRegistry = buildCrossReferenceRegistry(firmId, allDatasets, existingRegistry);
+  const enrichedDatasets = applyRegistryToDatasets(allDatasets, updatedRegistry);
+  await storeCrossReferenceRegistry(firmId, serialiseRegistry(updatedRegistry));
+  stagesCompleted.push('crossReference');
+
+  // ── Stage 4: Index ────────────────────────────────────────────────────────
+  const indexes = buildIndexes(enrichedDatasets, Object.keys(enrichedDatasets));
+  stagesCompleted.push('index');
+
+  // ── Stage 5: Join ─────────────────────────────────────────────────────────
+  const rawJoinResult = joinRecords(enrichedDatasets, indexes);
+  stagesCompleted.push('join');
+
+  // ── Stage 6: Enrich ───────────────────────────────────────────────────────
+  const joinResult = enrichRecords(rawJoinResult, new Date());
+  stagesCompleted.push('enrich');
+
+  // ── Stage 7: Aggregate ────────────────────────────────────────────────────
+  const availableFileTypes = Object.keys(allDatasets);
+  const aggregateResult = aggregate(joinResult, new Date(), availableFileTypes);
+  stagesCompleted.push('aggregate');
+
+  // ── Persist normalised dataset (update with cross-ref-enriched records) ───
+  await storeNormalisedDataset(
+    firmId,
+    fileType,
+    entityKey,
+    enrichedDatasets[fileType]?.records ?? allDatasets[fileType].records,
+    uploadId,
+  );
+
+  // ── Persist enriched entities for all entity types ────────────────────────
+  const joinEntityStore: Array<{ records: unknown[]; etype: string }> = [
+    { records: joinResult.timeEntries,    etype: 'timeEntry' },
+    { records: joinResult.matters,        etype: 'matter' },
+    { records: joinResult.feeEarners,     etype: 'feeEarner' },
+    { records: joinResult.invoices,       etype: 'invoice' },
+    { records: joinResult.clients,        etype: 'client' },
+    { records: joinResult.disbursements,  etype: 'disbursement' },
+    { records: joinResult.tasks,          etype: 'task' },
+    { records: joinResult.departments,    etype: 'department' },
+  ];
+  for (const { records, etype } of joinEntityStore) {
+    if (records.length > 0) {
+      await storeEnrichedEntities(
+        firmId,
+        etype,
+        records as Record<string, unknown>[],
+        [uploadId],
+        etype === entityKey ? {
+          quality_score: aggregateResult.dataQuality.overallScore,
+          issue_count: aggregateResult.dataQuality.entityIssues.length,
+          issues: aggregateResult.dataQuality.entityIssues,
+        } : undefined,
+      );
+    }
+  }
+
+  await storeCalculatedKpis(
+    firmId,
+    { aggregate: aggregateResult as unknown as Record<string, unknown>, generatedAt: new Date().toISOString() },
+    'pending',
+    new Date().toISOString(),
+  );
+
+  await setRecalculationFlag(firmId);
+  await updateUploadStatus(firmId, uploadId, 'processed');
+
+  const recordCount = allDatasets[fileType].recordCount;
+  return {
+    uploadId,
+    stagesCompleted,
+    warnings,
+    recordsProcessed: recordCount,
+    recordsPersisted: recordCount,
+    duration_ms: Date.now() - startTime,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // runFullPipeline — orchestrates Stages 2–7 for a single file upload
 // ---------------------------------------------------------------------------
 

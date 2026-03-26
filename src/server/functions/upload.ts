@@ -15,8 +15,8 @@ import { Readable } from 'stream';
 import busboy from 'busboy';
 import Papa from 'papaparse';
 import { authenticateRequest, AuthError } from '../lib/auth-middleware.js';
-import { storeRawUpload, updateUploadStatus } from '../lib/mongodb-operations.js';
-import { runFullPipeline } from '../pipeline/pipeline-orchestrator.js';
+import { storeRawUpload, updateUploadStatus, storeNormalisedDataset } from '../lib/mongodb-operations.js';
+import { normaliseUpload, runFullPipeline } from '../pipeline/pipeline-orchestrator.js';
 import { EntityType } from '../../shared/types/index.js';
 import type { MappingSet, ColumnMapping } from '../../shared/mapping/types.js';
 import type { ParseResult, ColumnInfo } from '../../client/parsers/types.js';
@@ -419,11 +419,10 @@ export const handler: Handler = async (event) => {
       userId,
     );
 
-    // Mark as processing
-    await updateUploadStatus(firmId, uploadId, 'processing');
-
-    // Dry run (validate only)
+    // Dry run (validate only) — runs full pipeline synchronously, no persistence
     if (!shouldRunPipeline) {
+      await updateUploadStatus(firmId, uploadId, 'processing');
+
       const dryResult = await runFullPipeline({
         firmId,
         userId,
@@ -455,35 +454,52 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    // Full pipeline run
-    const result = await runFullPipeline({
-      firmId,
-      userId,
-      uploadId,
-      fileType,
-      parseResult,
-      mappingSet,
-      dryRun: false,
-    });
+    // ── Phase 1: Normalise (Stage 2) synchronously ────────────────────────────
+    const normaliseResult = normaliseUpload({ fileType, parseResult, mappingSet });
 
-    if (result.aborted) {
+    if (normaliseResult.aborted) {
+      await updateUploadStatus(firmId, uploadId, 'error');
       return {
         statusCode: 422,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           success: false,
           uploadId,
-          message: 'Upload aborted — too many rows rejected during normalisation',
-          pipeline: {
-            stagesCompleted: result.stagesCompleted,
-            warnings: result.warnings,
-            recordsProcessed: result.recordsProcessed,
-            recordsPersisted: 0,
-            duration_ms: result.duration_ms,
-          },
+          message: `Upload aborted — ${normaliseResult.abortReason}`,
+          warnings: normaliseResult.warnings,
         }),
       };
     }
+
+    // Store normalised records so the background function can load them
+    await storeNormalisedDataset(
+      firmId,
+      fileType,
+      normaliseResult.entityKey,
+      normaliseResult.normaliseResult.records,
+      uploadId,
+    );
+
+    // Mark as processing before firing background task
+    await updateUploadStatus(firmId, uploadId, 'processing');
+
+    // ── Phase 2: fire-and-forget background function (Stages 3–7) ─────────────
+    // Do NOT await — background functions run for up to 15 minutes independently.
+    const siteUrl = process.env['URL'] ?? 'http://localhost:8888';
+    const bgUrl = `${siteUrl}/.netlify/functions/process-upload-background`;
+    const internalSecret = process.env['INTERNAL_API_SECRET'] ?? '';
+
+    void fetch(bgUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-internal-secret': internalSecret,
+      },
+      body: JSON.stringify({ uploadId, firmId, fileType }),
+    }).catch((err: unknown) => {
+      // Log but do not surface — background function may still succeed
+      console.error('[upload] failed to trigger background function', err);
+    });
 
     return {
       statusCode: 200,
@@ -491,14 +507,10 @@ export const handler: Handler = async (event) => {
       body: JSON.stringify({
         success: true,
         uploadId,
-        message: `${fileType} uploaded and processed successfully`,
-        pipeline: {
-          stagesCompleted: result.stagesCompleted,
-          warnings: result.warnings,
-          recordsProcessed: result.recordsProcessed,
-          recordsPersisted: result.recordsPersisted,
-          duration_ms: result.duration_ms,
-        },
+        status: 'processing',
+        message: `${fileType} received — ${normaliseResult.normaliseResult.records.length} records normalised, pipeline running in background`,
+        recordCount: normaliseResult.normaliseResult.records.length,
+        warnings: normaliseResult.warnings,
       }),
     };
 
