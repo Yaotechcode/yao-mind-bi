@@ -20,6 +20,7 @@ import WipDashboardPage from '@/pages/WipDashboardPage';
 import BillingDashboardPage from '@/pages/BillingDashboardPage';
 import MatterAnalysisPage from '@/pages/MatterAnalysisPage';
 import DataManagementPage from '@/pages/DataManagementPage';
+import SettingsPage from '@/pages/SettingsPage';
 
 // Help pages (existing)
 import HelpQueriesPage from '@/pages/HelpQueries';
