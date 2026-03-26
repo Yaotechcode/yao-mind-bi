@@ -3,6 +3,17 @@
   publish = "dist"
   functions = "src/server/functions"
 
+# Function timeouts (seconds).
+# Free tier: 10s max (these values are ignored beyond the plan cap).
+# Pro tier:  26s max.
+# Enterprise: higher limits available.
+# Set to plan maximums — Netlify silently caps at the plan limit.
+[functions]
+  timeout = 26
+
+[functions."upload"]
+  timeout = 26
+
 [build.environment]
   NODE_VERSION = "20"
 
