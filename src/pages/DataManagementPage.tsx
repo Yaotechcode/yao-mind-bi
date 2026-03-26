@@ -2,7 +2,7 @@
  * DataManagementPage — Upload, review, and manage firm data.
  */
 
-import { useState, useCallback, useRef, useMemo, Fragment } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Upload, FileJson, FileSpreadsheet, FileText, CheckCircle2, XCircle,
@@ -18,7 +18,7 @@ import { AlertCard } from '@/components/common/AlertCard';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ProgressBar } from '@/components/common/ProgressBar';
 import { useUpload } from '@/hooks/useUpload';
-import { fetchConfig, updateConfig } from '@/lib/api-client';
+import { fetchConfig, updateConfig, fetchUploadStatus, type UploadStatusEntry } from '@/lib/api-client';
 
 // ---------------------------------------------------------------------------
 // Types
