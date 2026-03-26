@@ -64,6 +64,43 @@ async function setup(): Promise<void> {
   await recalcFlags.createIndex({ firm_id: 1 }, { unique: true });
   console.log('recalculation_flags: indexes created');
 
+  // ---------------------------------------------------------------------------
+  // historical_snapshots
+  // ---------------------------------------------------------------------------
+  await db.createCollection('historical_snapshots', {
+    validator: {
+      $jsonSchema: {
+        bsonType: 'object',
+        required: ['firm_id', 'period', 'snapshot_date'],
+        properties: {
+          firm_id:       { bsonType: 'string' },
+          period:        { bsonType: 'string', enum: ['daily', 'weekly', 'monthly', 'quarterly', 'annual'] },
+          snapshot_date: { bsonType: 'date' },
+        },
+      },
+    },
+  }).catch(() => {
+    // Collection already exists — apply validator update instead
+    return db.command({
+      collMod: 'historical_snapshots',
+      validator: {
+        $jsonSchema: {
+          bsonType: 'object',
+          required: ['firm_id', 'period', 'snapshot_date'],
+          properties: {
+            firm_id:       { bsonType: 'string' },
+            period:        { bsonType: 'string', enum: ['daily', 'weekly', 'monthly', 'quarterly', 'annual'] },
+            snapshot_date: { bsonType: 'date' },
+          },
+        },
+      },
+    });
+  });
+  const snapshots = db.collection('historical_snapshots');
+  await snapshots.createIndex({ firm_id: 1, period: 1, snapshot_date: -1 });
+  await snapshots.createIndex({ firm_id: 1, snapshot_date: -1 });
+  console.log('historical_snapshots: indexes created');
+
   console.log('\nAll indexes created successfully.');
   process.exit(0);
 }
