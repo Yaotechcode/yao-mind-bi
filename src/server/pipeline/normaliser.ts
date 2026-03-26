@@ -37,7 +37,9 @@ function coerceNumber(
   if (typeof value === 'number') {
     return isNaN(value) ? { result: null, warn: true } : { result: value, warn: false };
   }
-  const str = String(value).replace(/[^0-9.\-]/g, '');
+  const raw = String(value).trim();
+  if (raw === '') return { result: null, warn: false };
+  const str = raw.replace(/[^0-9.\-]/g, '');
   if (str === '' || str === '-') return { result: null, warn: true };
   const n = parseFloat(str);
   if (isNaN(n)) return { result: null, warn: true };
@@ -53,7 +55,9 @@ function coerceCurrency(
   if (typeof value === 'number') {
     return isNaN(value) ? { result: null, warn: true } : { result: value, warn: false };
   }
-  const str = String(value).replace(/[£$€,\s]/g, '');
+  const raw = String(value).trim();
+  if (raw === '') return { result: null, warn: false };
+  const str = raw.replace(/[£$€,\s]/g, '');
   if (str === '' || str === '-') return { result: null, warn: true };
   const n = parseFloat(str);
   if (isNaN(n)) return { result: null, warn: true };
@@ -72,6 +76,7 @@ function coercePercentage(
     return { result: value <= 1 ? value * 100 : value, warn: false };
   }
   const raw = String(value).trim();
+  if (raw === '') return { result: null, warn: false };
   // Strip trailing % if present
   const stripped = raw.endsWith('%') ? raw.slice(0, -1).trim() : raw;
   if (stripped === '') return { result: null, warn: true };
@@ -230,6 +235,24 @@ function applyCoercion(
 
 function applyFeeEarnerRules(record: NormalisedRecord): NormalisedRecord {
   const out = { ...record };
+
+  // Extract rate from JSON array: [{"label":"...","value":295,"default":true}]
+  if (typeof out.rate === 'string' && (out.rate as string).startsWith('[')) {
+    try {
+      const parsed = JSON.parse(out.rate as string) as Array<{
+        label?: string;
+        value?: number;
+        default?: boolean;
+      }>;
+      if (Array.isArray(parsed)) {
+        out.allRates = parsed;
+        const defaultEntry = parsed.find((e) => e.default === true) ?? parsed[0];
+        out.rate = defaultEntry?.value ?? null;
+      }
+    } catch {
+      // Keep as-is if parse fails
+    }
+  }
 
   // payModel normalisation
   if (typeof out.payModel === 'string') {

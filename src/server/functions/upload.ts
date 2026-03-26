@@ -100,7 +100,6 @@ const GLOBAL_OVERRIDES: Record<string, string> = {
   firmlead:              'firmLeadPercent',
   workingdaysweek:       'workingDaysPerWeek',
   attorneyid:            'id',
-  id:                    'contactId',
   wipunits:              'totalUnits',
   wipdurationminutes:    'totalDurationMinutes',
   responsiblelawyerid:   'responsibleLawyerId',
@@ -119,6 +118,9 @@ const FILE_TYPE_OVERRIDES: Record<string, Record<string, string>> = {
   },
   invoicesJson: {
     writeoff: 'writeOff',
+  },
+  contactsJson: {
+    id: 'contactId',
   },
 };
 
