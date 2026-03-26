@@ -1,16 +1,16 @@
 /**
  * EnhancedSettings — Custom fields, entity types, formula config, WIP age bands, overhead, scorecard weights.
+ * All inputs use local state. Saves happen on explicit button click only.
  */
 
 import { useState } from 'react';
-import { Plus, Trash2, GripVertical } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useConfig } from '@/hooks/useConfig';
 import { DashboardSection } from '@/components/common/DashboardSection';
 import { EmptyState } from '@/components/common/EmptyState';
 import { Button } from '@/components/ui/button';
-import { AlertCard } from '@/components/common/AlertCard';
 
 // ---------------------------------------------------------------------------
 // Custom Fields
@@ -261,6 +261,19 @@ function WipAgeBandsSection() {
 function OverheadModelSection() {
   const { updateConfig } = useConfig();
   const [model, setModel] = useState<'none' | 'per_head' | 'by_revenue' | 'by_hours' | 'custom'>('none');
+  const [overheadValue, setOverheadValue] = useState<string>('');
+
+  const saveOverhead = async () => {
+    try {
+      await updateConfig('overheadModel.type', model);
+      if (model !== 'none' && overheadValue) {
+        await updateConfig('overheadModel.value', Number(overheadValue));
+      }
+      toast.success('Overhead model saved');
+    } catch {
+      toast.error('Failed to save overhead model');
+    }
+  };
 
   return (
     <DashboardSection title="Overhead Model">
@@ -268,11 +281,7 @@ function OverheadModelSection() {
         <select
           className="h-8 rounded-input border border-input bg-background px-2.5 text-xs text-foreground focus:ring-2 focus:ring-ring"
           value={model}
-          onChange={(e) => {
-            const v = e.target.value as typeof model;
-            setModel(v);
-            updateConfig('overheadModel.type', v);
-          }}
+          onChange={(e) => setModel(e.target.value as typeof model)}
         >
           <option value="none">None</option>
           <option value="per_head">Per head</option>
@@ -293,10 +302,13 @@ function OverheadModelSection() {
               type="number"
               className="h-8 w-32 mt-2 rounded-input border border-input bg-background px-2.5 text-xs text-foreground"
               placeholder={model === 'by_revenue' ? 'e.g. 15%' : 'e.g. £50,000'}
-              onChange={(e) => updateConfig('overheadModel.value', Number(e.target.value))}
+              value={overheadValue}
+              onChange={(e) => setOverheadValue(e.target.value)}
             />
           </div>
         )}
+
+        <Button size="sm" onClick={saveOverhead}>Save Overhead Model</Button>
       </div>
     </DashboardSection>
   );
