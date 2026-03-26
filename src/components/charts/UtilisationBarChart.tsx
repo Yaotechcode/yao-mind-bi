@@ -51,10 +51,11 @@ export function UtilisationBarChart({ data }: UtilisationBarChartProps) {
           tick={{ fontSize: 11, fill: 'hsl(212 10% 62%)' }}
         />
         <Tooltip
-          formatter={(value: number) => [`${value.toFixed(1)}%`, 'Utilisation']}
-          labelFormatter={(_: string, payload: Array<{ payload?: { name?: string } }>) =>
-            payload?.[0]?.payload?.name ?? _
-          }
+          formatter={(value: unknown) => [`${Number(value).toFixed(1)}%`, 'Utilisation']}
+          labelFormatter={(_: unknown, payload: unknown[]) => {
+            const p = payload as Array<{ payload?: { name?: string } }>;
+            return p?.[0]?.payload?.name ?? String(_);
+          }}
           contentStyle={{ fontSize: 12, borderRadius: 6, border: '1px solid hsl(223 25% 93%)' }}
         />
         <ReferenceLine

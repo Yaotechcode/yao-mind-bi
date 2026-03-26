@@ -42,7 +42,7 @@ export function DonutChart({ data, centerLabel }: DonutChartProps) {
             ))}
           </Pie>
           <Tooltip
-            formatter={(value: number) => [currencyFmt(value), '']}
+            formatter={(value: unknown) => [currencyFmt(Number(value)), '']}
             contentStyle={{ fontSize: 12, borderRadius: 6, border: '1px solid hsl(223 25% 93%)' }}
           />
           <Legend

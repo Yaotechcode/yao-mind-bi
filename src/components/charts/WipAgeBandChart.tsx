@@ -34,8 +34,8 @@ export function WipAgeBandChart({ data, onBandClick }: WipAgeBandChartProps) {
           tick={{ fontSize: 11, fill: 'hsl(196 72% 18%)' }}
         />
         <Tooltip
-          formatter={(value: number) => [currencyFmt(value), 'Value']}
-          labelFormatter={(label: string) => label}
+          formatter={(value: unknown) => [currencyFmt(Number(value)), 'Value']}
+          labelFormatter={(label: unknown) => String(label)}
           contentStyle={{ fontSize: 12, borderRadius: 6, border: '1px solid hsl(223 25% 93%)' }}
           itemStyle={{ color: 'hsl(196 72% 18%)' }}
         />

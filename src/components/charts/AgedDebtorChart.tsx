@@ -34,7 +34,7 @@ export function AgedDebtorChart({ bands, onBandClick }: AgedDebtorChartProps) {
           tick={{ fontSize: 11, fill: 'hsl(196 72% 18%)' }}
         />
         <Tooltip
-          formatter={(value: number) => [currencyFmt(value), 'Outstanding']}
+          formatter={(value: unknown) => [currencyFmt(Number(value)), 'Outstanding']}
           contentStyle={{ fontSize: 12, borderRadius: 6, border: '1px solid hsl(223 25% 93%)' }}
         />
         <Bar
