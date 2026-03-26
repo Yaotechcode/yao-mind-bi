@@ -14,6 +14,7 @@ import ResetPasswordPage from '@/pages/ResetPasswordPage';
 // Layout
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { DashboardPlaceholder } from '@/components/layout/DashboardPlaceholder';
+import FirmOverviewPage from '@/pages/FirmOverviewPage';
 
 // Help pages (existing)
 import HelpQueriesPage from '@/pages/HelpQueries';
