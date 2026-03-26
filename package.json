@@ -5,8 +5,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc",
-    "dev": "netlify dev",
+    "build": "vite build",
+    "dev": "vite",
     "test": "vitest",
     "test:run": "vitest run",
     "typecheck": "tsc --noEmit",
