@@ -213,17 +213,18 @@ function parseFileContent(
   content: Buffer,
 ): Record<string, unknown>[] {
   const text = content.toString('utf-8');
+  const trimmed = text.trimStart();
+
+  // Detect format: content-first, then fall back to fileType convention.
+  // Any file starting with '{' or '[' is treated as JSON regardless of fileType.
+  // Anything else (including feeEarner and non-Json fileTypes) is treated as CSV.
+  const looksLikeJson = trimmed.startsWith('{') || trimmed.startsWith('[');
+  const isJsonFileType = fileType.endsWith('Json');
+  const treatAsJson = looksLikeJson || isJsonFileType;
 
   let rows: Record<string, unknown>[];
 
-  if (fileType === 'feeEarner') {
-    const result = Papa.parse<Record<string, unknown>>(text, {
-      header: true,
-      skipEmptyLines: true,
-    });
-    rows = result.data;
-  } else {
-    // JSON types
+  if (treatAsJson) {
     const parsed: unknown = JSON.parse(text);
     if (Array.isArray(parsed)) {
       rows = parsed as Record<string, unknown>[];
@@ -239,6 +240,13 @@ function parseFileContent(
     } else {
       throw new Error('File content is not a JSON array');
     }
+  } else {
+    // CSV — feeEarner and any non-Json fileType
+    const result = Papa.parse<Record<string, unknown>>(text, {
+      header: true,
+      skipEmptyLines: true,
+    });
+    rows = result.data;
   }
 
   return normaliseRecordKeys(rows);
