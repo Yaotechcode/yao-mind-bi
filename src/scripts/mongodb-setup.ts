@@ -8,7 +8,16 @@
  *   MONGODB_URI=<uri> MONGODB_DB_NAME=<db> npx tsx src/scripts/mongodb-setup.ts
  */
 
+import dotenv from 'dotenv';
 import { getDb } from '../server/lib/mongodb.js';
+
+dotenv.config({ path: '.env.local', override: true });
+if (!process.env['MONGODB_URI']) {
+  dotenv.config({ path: '.env.local', encoding: 'utf8', override: true });
+}
+if (!process.env['MONGODB_URI']) {
+  throw new Error('MONGODB_URI not loaded — check .env.local exists and has no BOM or CRLF issues');
+}
 
 async function setup(): Promise<void> {
   const db = await getDb();
