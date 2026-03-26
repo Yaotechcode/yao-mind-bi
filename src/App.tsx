@@ -19,6 +19,7 @@ import FeeEarnerPerformancePage from '@/pages/FeeEarnerPerformancePage';
 import WipDashboardPage from '@/pages/WipDashboardPage';
 import BillingDashboardPage from '@/pages/BillingDashboardPage';
 import MatterAnalysisPage from '@/pages/MatterAnalysisPage';
+import DataManagementPage from '@/pages/DataManagementPage';
 
 // Help pages (existing)
 import HelpQueriesPage from '@/pages/HelpQueries';
