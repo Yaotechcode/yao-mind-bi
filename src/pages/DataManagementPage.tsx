@@ -470,12 +470,14 @@ export default function DataManagementPage() {
   const refreshUploadStatus = useCallback(async () => {
     try {
       const entries = await fetchUploadStatus();
-      const datasets: LoadedDataset[] = entries.map((e) => ({
-        fileType: normaliseDatasetFileType(e.fileType),
-        recordCount: e.recordCount ?? 0,
-        dateLoaded: e.uploadedAt ?? '',
-        status: e.status === 'loaded' ? 'loaded' : 'processing',
-      }));
+      const datasets: LoadedDataset[] = entries
+        .filter((e) => e.status === 'loaded')
+        .map((e) => ({
+          fileType: normaliseDatasetFileType(e.fileType),
+          recordCount: e.recordCount ?? 0,
+          dateLoaded: e.uploadedAt ?? '',
+          status: 'loaded' as const,
+        }));
       setLoadedDatasets(datasets);
     } catch {
       // Silently fail — table just stays empty
