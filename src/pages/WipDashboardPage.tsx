@@ -344,8 +344,8 @@ export default function WipDashboardPage() {
                             className={`px-2 py-1 text-foreground ${col.align === 'right' ? 'text-right' : ''} ${col.align === 'center' ? 'text-center' : ''}`}
                           >
                             {col.render
-                              ? col.render((entry as Record<string, unknown>)[col.key], entry as unknown as Record<string, unknown>, idx)
-                              : String((entry as Record<string, unknown>)[col.key] ?? '—')}
+                              ? col.render((entry as unknown as Record<string, unknown>)[col.key], entry as unknown as Record<string, unknown>, idx)
+                              : String((entry as unknown as Record<string, unknown>)[col.key] ?? '—')}
                           </td>
                         ))}
                       </tr>
