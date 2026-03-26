@@ -1,29 +1,72 @@
 /**
  * upload-status.ts — Netlify Function
- * GET /api/upload-status            → all uploads for this firm (newest first)
- * GET /api/upload-status/:uploadId  → single upload status
+ *
+ * GET /api/upload-status?limit=20   → per-fileType load status for all known datasets
+ * GET /api/upload-status/:uploadId  → single upload document
  */
 
 import type { Handler } from '@netlify/functions';
 import { authenticateRequest, AuthError } from '../lib/auth-middleware.js';
 import { getUploadHistory, getUploadById } from '../lib/mongodb-operations.js';
 
-function extractId(path: string): string | null {
+// ---------------------------------------------------------------------------
+// Dataset catalogue
+// ---------------------------------------------------------------------------
+
+interface DatasetMeta {
+  fileType: string;
+  label: string;
+}
+
+const DATASETS: DatasetMeta[] = [
+  { fileType: 'feeEarner',         label: 'Fee Earners' },
+  { fileType: 'wipJson',           label: 'WIP Entries' },
+  { fileType: 'fullMattersJson',   label: 'Full Matters' },
+  { fileType: 'closedMattersJson', label: 'Closed Matters' },
+  { fileType: 'invoicesJson',      label: 'Invoices' },
+  { fileType: 'contactsJson',      label: 'Contacts' },
+  { fileType: 'disbursementsJson', label: 'Disbursements' },
+  { fileType: 'tasksJson',         label: 'Tasks' },
+  { fileType: 'lawyersJson',       label: 'Lawyers' },
+];
+
+// ---------------------------------------------------------------------------
+// Response type
+// ---------------------------------------------------------------------------
+
+interface DatasetStatus {
+  fileType: string;
+  label: string;
+  recordCount: number | null;
+  uploadedAt: string | null;
+  uploadId: string | null;
+  status: 'loaded' | 'not_loaded';
+}
+
+// ---------------------------------------------------------------------------
+// Routing helper
+// ---------------------------------------------------------------------------
+
+function extractUploadId(path: string): string | null {
   const segments = path.replace(/\/$/, '').split('/');
   const last = segments[segments.length - 1];
   return last && last !== 'upload-status' ? last : null;
 }
 
+// ---------------------------------------------------------------------------
+// Handler
+// ---------------------------------------------------------------------------
+
 export const handler: Handler = async (event) => {
+  if (event.httpMethod !== 'GET') {
+    return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
+  }
+
   try {
     const { firmId } = await authenticateRequest(event);
 
-    if (event.httpMethod !== 'GET') {
-      return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
-    }
-
-    const uploadId = extractId(event.path ?? '');
-
+    // Single-upload lookup: GET /api/upload-status/:uploadId
+    const uploadId = extractUploadId(event.path ?? '');
     if (uploadId) {
       const upload = await getUploadById(firmId, uploadId);
       if (!upload) {
@@ -36,12 +79,43 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    const limit = parseInt(event.queryStringParameters?.['limit'] ?? '20', 10);
-    const uploads = await getUploadHistory(firmId, limit);
+    // Dataset status summary: GET /api/upload-status
+    const limitParam = event.queryStringParameters?.['limit'];
+    const limit = limitParam ? parseInt(limitParam, 10) : 20;
+
+    // Fetch enough history to cover at least one entry per dataset type
+    const history = await getUploadHistory(firmId, Math.max(limit, DATASETS.length * 3));
+
+    // Pick the most recent processed upload per fileType (history is already newest-first)
+    const latestByType = new Map<string, typeof history[number]>();
+    for (const upload of history) {
+      if (upload.status !== 'processed') continue;
+      if (!latestByType.has(upload.file_type)) {
+        latestByType.set(upload.file_type, upload);
+      }
+    }
+
+    const result: DatasetStatus[] = DATASETS.map(({ fileType, label }) => {
+      const doc = latestByType.get(fileType);
+      if (!doc) {
+        return { fileType, label, recordCount: null, uploadedAt: null, uploadId: null, status: 'not_loaded' };
+      }
+      return {
+        fileType,
+        label,
+        recordCount: doc.record_count,
+        uploadedAt: doc.upload_date instanceof Date
+          ? doc.upload_date.toISOString()
+          : new Date(doc.upload_date).toISOString(),
+        uploadId: doc._id ? String(doc._id) : null,
+        status: 'loaded',
+      };
+    });
+
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(uploads),
+      body: JSON.stringify(result),
     };
 
   } catch (err) {
