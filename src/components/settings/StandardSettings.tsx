@@ -1,8 +1,9 @@
 /**
  * StandardSettings — Firm profile, working time, cost calculation, fee share, revenue attribution, RAG thresholds.
+ * All text/number inputs use local state and save onBlur only. Selects/radios/checkboxes save immediately.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Check, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -44,9 +45,10 @@ function SettingRow({
   );
 }
 
+/** Number input that only calls onSave on blur */
 function NumberInput({
   value,
-  onChange,
+  onSave,
   min,
   max,
   step,
@@ -54,13 +56,19 @@ function NumberInput({
   className,
 }: {
   value: number | undefined;
-  onChange: (v: number) => void;
+  onSave: (v: number) => void;
   min?: number;
   max?: number;
   step?: number;
   prefix?: string;
   className?: string;
 }) {
+  const [local, setLocal] = useState<string>(String(value ?? ''));
+
+  useEffect(() => {
+    setLocal(String(value ?? ''));
+  }, [value]);
+
   return (
     <div className="inline-flex items-center gap-1">
       {prefix && <span className="text-xs text-muted-foreground">{prefix}</span>}
@@ -70,13 +78,47 @@ function NumberInput({
           'h-8 w-20 rounded-input border border-input bg-background px-2 text-xs text-foreground text-right focus:ring-2 focus:ring-ring',
           className,
         )}
-        value={value ?? ''}
+        value={local}
         min={min}
         max={max}
         step={step ?? 1}
-        onChange={(e) => onChange(Number(e.target.value))}
+        onChange={(e) => setLocal(e.target.value)}
+        onBlur={() => {
+          const num = Number(local);
+          if (!isNaN(num)) onSave(num);
+        }}
       />
     </div>
+  );
+}
+
+/** Text input that only calls onSave on blur */
+function TextInput({
+  value,
+  onSave,
+  className,
+}: {
+  value: string;
+  onSave: (v: string) => void;
+  className?: string;
+}) {
+  const [local, setLocal] = useState(value);
+
+  useEffect(() => {
+    setLocal(value);
+  }, [value]);
+
+  return (
+    <input
+      type="text"
+      className={cn(
+        'h-8 w-48 rounded-input border border-input bg-background px-2.5 text-xs text-foreground focus:ring-2 focus:ring-ring',
+        className,
+      )}
+      value={local}
+      onChange={(e) => setLocal(e.target.value)}
+      onBlur={() => onSave(local)}
+    />
   );
 }
 
@@ -130,7 +172,7 @@ const DEFAULT_RAG_METRICS = [
 function RagThresholdTable({
   onSave,
 }: {
-  onSave: (key: string, values: { green: number; amber: number; red: number }) => void;
+  onSave: (thresholds: typeof DEFAULT_RAG_METRICS) => void;
 }) {
   const [thresholds, setThresholds] = useState(
     DEFAULT_RAG_METRICS.map((m) => ({ ...m })),
@@ -142,54 +184,59 @@ function RagThresholdTable({
       next[idx] = { ...next[idx], [field]: val };
       return next;
     });
-    const row = thresholds[idx];
-    onSave(row.key, { ...row, [field]: val });
   };
 
   return (
-    <div className="overflow-x-auto border border-border rounded-lg">
-      <table className="w-full text-[13px]">
-        <thead>
-          <tr className="border-b border-border bg-standard-background">
-            <th className="px-3 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Metric</th>
-            <th className="px-3 py-2 text-right text-[11px] font-semibold text-success uppercase tracking-wider">Green</th>
-            <th className="px-3 py-2 text-right text-[11px] font-semibold text-warning uppercase tracking-wider">Amber</th>
-            <th className="px-3 py-2 text-right text-[11px] font-semibold text-error uppercase tracking-wider">Red</th>
-          </tr>
-        </thead>
-        <tbody>
-          {thresholds.map((row, idx) => (
-            <tr key={row.key} className="border-b border-standard-background">
-              <td className="px-3 py-2 font-medium text-foreground">{row.label}</td>
-              <td className="px-3 py-2 text-right">
-                <input
-                  type="number"
-                  className="h-7 w-16 rounded-input border border-input bg-background px-1.5 text-xs text-right text-foreground"
-                  value={row.green}
-                  onChange={(e) => update(idx, 'green', Number(e.target.value))}
-                />
-              </td>
-              <td className="px-3 py-2 text-right">
-                <input
-                  type="number"
-                  className="h-7 w-16 rounded-input border border-input bg-background px-1.5 text-xs text-right text-foreground"
-                  value={row.amber}
-                  onChange={(e) => update(idx, 'amber', Number(e.target.value))}
-                />
-              </td>
-              <td className="px-3 py-2 text-right">
-                <input
-                  type="number"
-                  className="h-7 w-16 rounded-input border border-input bg-background px-1.5 text-xs text-right text-foreground"
-                  value={row.red}
-                  onChange={(e) => update(idx, 'red', Number(e.target.value))}
-                />
-              </td>
+    <>
+      <div className="overflow-x-auto border border-border rounded-lg">
+        <table className="w-full text-[13px]">
+          <thead>
+            <tr className="border-b border-border bg-standard-background">
+              <th className="px-3 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Metric</th>
+              <th className="px-3 py-2 text-right text-[11px] font-semibold text-success uppercase tracking-wider">Green</th>
+              <th className="px-3 py-2 text-right text-[11px] font-semibold text-warning uppercase tracking-wider">Amber</th>
+              <th className="px-3 py-2 text-right text-[11px] font-semibold text-error uppercase tracking-wider">Red</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {thresholds.map((row, idx) => (
+              <tr key={row.key} className="border-b border-standard-background">
+                <td className="px-3 py-2 font-medium text-foreground">{row.label}</td>
+                <td className="px-3 py-2 text-right">
+                  <input
+                    type="number"
+                    className="h-7 w-16 rounded-input border border-input bg-background px-1.5 text-xs text-right text-foreground"
+                    value={row.green}
+                    onChange={(e) => update(idx, 'green', Number(e.target.value))}
+                  />
+                </td>
+                <td className="px-3 py-2 text-right">
+                  <input
+                    type="number"
+                    className="h-7 w-16 rounded-input border border-input bg-background px-1.5 text-xs text-right text-foreground"
+                    value={row.amber}
+                    onChange={(e) => update(idx, 'amber', Number(e.target.value))}
+                  />
+                </td>
+                <td className="px-3 py-2 text-right">
+                  <input
+                    type="number"
+                    className="h-7 w-16 rounded-input border border-input bg-background px-1.5 text-xs text-right text-foreground"
+                    value={row.red}
+                    onChange={(e) => update(idx, 'red', Number(e.target.value))}
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="mt-3">
+        <Button size="sm" onClick={() => onSave(thresholds)}>
+          Save Thresholds
+        </Button>
+      </div>
+    </>
   );
 }
 
@@ -216,7 +263,7 @@ export function StandardSettings() {
     [updateConfig],
   );
 
-  // Local state derived from config
+  // Local state derived from config (read once)
   const firmName = config?.firmName ?? '';
   const currency = config?.currency ?? 'GBP';
   const fyStartMonth = config?.financialYearStartMonth ?? 4;
@@ -254,11 +301,9 @@ export function StandardSettings() {
       <DashboardSection title="Firm Profile">
         <SettingRow label="Firm Name">
           <div className="flex items-center gap-2">
-            <input
-              type="text"
-              className="h-8 w-48 rounded-input border border-input bg-background px-2.5 text-xs text-foreground focus:ring-2 focus:ring-ring"
+            <TextInput
               value={firmName}
-              onChange={(e) => save('firmName', e.target.value)}
+              onSave={(v) => save('firmName', v)}
             />
             <SavedIndicator show={savedField === 'firmName'} />
           </div>
@@ -297,37 +342,37 @@ export function StandardSettings() {
       <DashboardSection title="Working Time Defaults">
         <SettingRow label="Working days per week">
           <div className="flex items-center gap-2">
-            <NumberInput value={workingDays} onChange={(v) => save('workingDaysPerWeek', v, true)} min={1} max={7} />
+            <NumberInput value={workingDays} onSave={(v) => save('workingDaysPerWeek', v, true)} min={1} max={7} />
             <SavedIndicator show={savedField === 'workingDaysPerWeek'} />
           </div>
         </SettingRow>
         <SettingRow label="Daily target hours">
           <div className="flex items-center gap-2">
-            <NumberInput value={dailyTarget} onChange={(v) => save('dailyTargetHours', v, true)} min={0} max={24} step={0.5} />
+            <NumberInput value={dailyTarget} onSave={(v) => save('dailyTargetHours', v, true)} min={0} max={24} step={0.5} />
             <SavedIndicator show={savedField === 'dailyTargetHours'} />
           </div>
         </SettingRow>
         <SettingRow label="Weekly target hours" description={`Derived: ${workingDays} × ${dailyTarget} = ${weeklyTarget}`}>
           <div className="flex items-center gap-2">
-            <NumberInput value={weeklyTarget} onChange={(v) => save('weeklyTargetHours', v, true)} min={0} step={0.5} />
+            <NumberInput value={weeklyTarget} onSave={(v) => save('weeklyTargetHours', v, true)} min={0} step={0.5} />
             <SavedIndicator show={savedField === 'weeklyTargetHours'} />
           </div>
         </SettingRow>
         <SettingRow label="Chargeable weekly target">
           <div className="flex items-center gap-2">
-            <NumberInput value={chargeableTarget} onChange={(v) => save('chargeableWeeklyTarget', v, true)} min={0} step={0.25} />
+            <NumberInput value={chargeableTarget} onSave={(v) => save('chargeableWeeklyTarget', v, true)} min={0} step={0.25} />
             <SavedIndicator show={savedField === 'chargeableWeeklyTarget'} />
           </div>
         </SettingRow>
         <SettingRow label="Annual leave entitlement" description="Days per year">
           <div className="flex items-center gap-2">
-            <NumberInput value={annualLeave} onChange={(v) => save('annualLeaveEntitlement', v, true)} min={0} />
+            <NumberInput value={annualLeave} onSave={(v) => save('annualLeaveEntitlement', v, true)} min={0} />
             <SavedIndicator show={savedField === 'annualLeaveEntitlement'} />
           </div>
         </SettingRow>
         <SettingRow label="Bank holidays per year">
           <div className="flex items-center gap-2">
-            <NumberInput value={bankHolidays} onChange={(v) => save('bankHolidaysPerYear', v, true)} min={0} />
+            <NumberInput value={bankHolidays} onSave={(v) => save('bankHolidaysPerYear', v, true)} min={0} />
             <SavedIndicator show={savedField === 'bankHolidaysPerYear'} />
           </div>
         </SettingRow>
@@ -369,7 +414,7 @@ export function StandardSettings() {
       <DashboardSection title="Fee Share Configuration">
         <SettingRow label="Default fee share %" description={`Firm retains: ${100 - feeSharePct}%`}>
           <div className="flex items-center gap-2">
-            <NumberInput value={feeSharePct} onChange={(v) => save('defaultFeeSharePercent', v, true)} min={0} max={100} />
+            <NumberInput value={feeSharePct} onSave={(v) => save('defaultFeeSharePercent', v, true)} min={0} max={100} />
             <SavedIndicator show={savedField === 'defaultFeeSharePercent'} />
           </div>
         </SettingRow>
@@ -430,7 +475,13 @@ export function StandardSettings() {
       {/* 6. RAG Thresholds */}
       <DashboardSection title="RAG Thresholds">
         <RagThresholdTable
-          onSave={(key, values) => save(`ragThresholds.${key}`, values, true)}
+          onSave={(thresholds) => {
+            const obj: Record<string, { green: number; amber: number; red: number }> = {};
+            for (const t of thresholds) {
+              obj[t.key] = { green: t.green, amber: t.amber, red: t.red };
+            }
+            save('ragThresholds', obj, true);
+          }}
         />
         <div className="mt-3">
           <Button
