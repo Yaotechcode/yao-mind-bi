@@ -44,9 +44,11 @@ const JSON_SUFFIX_MAP: Record<string, string> = {
   tasks:          'tasksJson',
   // Plural / alternate forms
   feeEarners:     'feeEarner',
+  lawyers:        'feeEarner',
   matters:        'fullMattersJson',
+  closedmatters:  'closedMattersJson',
   lawyerTime:     'wipJson',
-  lawyers:        'wipJson',
+  unbilledwip:    'wipJson',
   invoice:        'invoicesJson',
   contact:        'contactsJson',
   disbursement:   'disbursementsJson',
@@ -85,15 +87,39 @@ function normalizeFileType(raw: string): string {
   return JSON_SUFFIX_MAP[raw] ?? raw;
 }
 
-/**
- * Known Metabase/Yao column names that don't camelCase cleanly.
- * Applied after camelCase normalisation (key is the lowercased camelCase result).
- */
-const COLUMN_OVERRIDES: Record<string, string> = {
-  clients:   'clientIds',
-  writeoff:  'writeOff',
-  writtenoff: 'writtenOff',
-  vat:       'vat',
+/** Global overrides applied to all file types after camelCase normalisation. */
+const GLOBAL_OVERRIDES: Record<string, string> = {
+  clients:               'clientIds',
+  writtenoff:            'writtenOff',
+  vat:                   'vat',
+  matterstatus:          'status',
+  matterbudget:          'budget',
+  tasktitle:             'title',
+  taskdescription:       'description',
+  feeshare:              'feeSharePercent',
+  firmlead:              'firmLeadPercent',
+  workingdaysweek:       'workingDaysPerWeek',
+  attorneyid:            'id',
+  id:                    'contactId',
+  wipunits:              'totalUnits',
+  wipdurationminutes:    'totalDurationMinutes',
+  responsiblelawyerid:   'responsibleLawyerId',
+};
+
+/** Per-fileType overrides applied AFTER global overrides. */
+const FILE_TYPE_OVERRIDES: Record<string, Record<string, string>> = {
+  feeEarner: {
+    responsiblelawyer: 'name',
+    writeoff:          'writeOffValue',
+    billable:          'billableValue',
+  },
+  wipJson: {
+    billable: 'billableValue',
+    writeoff: 'writeOffValue',
+  },
+  invoicesJson: {
+    writeoff: 'writeOff',
+  },
 };
 
 /**
@@ -101,32 +127,42 @@ const COLUMN_OVERRIDES: Record<string, string> = {
  *   "Title Case With Spaces" → "titleCaseWithSpaces"
  *   "snake_case"             → "snakeCase"
  *   "PascalCase"             → "pascalCase"
+ *   "Fee Share %"            → checked via lowercased camel against overrides
  *   "alreadyCamel"           → "alreadyCamel"
+ *
+ * Strips trailing '%' and '#' before processing.
+ * Does NOT apply overrides — that is handled by normaliseRecordKeys.
  */
 function normaliseToCamelCase(key: string): string {
-  const trimmed = key.trim();
+  // Trim whitespace and trailing special characters
+  const trimmed = key.trim().replace(/[%#]+$/, '');
 
   // Split on spaces or underscores, then join as camelCase
   const words = trimmed.split(/[\s_]+/);
-  const camel = words
+  return words
     .map((word, i) =>
       i === 0
         ? word.charAt(0).toLowerCase() + word.slice(1)
         : word.charAt(0).toUpperCase() + word.slice(1),
     )
     .join('');
-
-  // Check override map (lowercase the whole camelCase result for lookup)
-  return COLUMN_OVERRIDES[camel.toLowerCase()] ?? camel;
 }
 
-/** Apply normaliseToCamelCase to every key in every record. */
+/** Apply camelCase normalisation and both override tiers to every key in every record. */
 function normaliseRecordKeys(
   records: Record<string, unknown>[],
+  fileType: string,
 ): Record<string, unknown>[] {
+  const fileOverrides = FILE_TYPE_OVERRIDES[fileType] ?? {};
   return records.map((record) =>
     Object.fromEntries(
-      Object.entries(record).map(([k, v]) => [normaliseToCamelCase(k), v]),
+      Object.entries(record).map(([k, v]) => {
+        const camel = normaliseToCamelCase(k);
+        const lower = camel.toLowerCase();
+        const key = GLOBAL_OVERRIDES[lower] ?? camel;
+        const finalKey = fileOverrides[key.toLowerCase()] ?? key;
+        return [finalKey, v];
+      }),
     ),
   );
 }
@@ -218,7 +254,7 @@ function buildIdentityMappingSet(
   };
 }
 
-/** Parse file buffer into rows based on fileType, with column name normalisation. */
+/** Parse file buffer into rows based on content, with column name normalisation. */
 function parseFileContent(
   fileType: string,
   content: Buffer,
@@ -258,7 +294,7 @@ function parseFileContent(
     rows = result.data;
   }
 
-  return normaliseRecordKeys(rows);
+  return normaliseRecordKeys(rows, fileType);
 }
 
 /** Build a complete ParseResult from raw rows. */
