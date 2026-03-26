@@ -539,7 +539,9 @@ export default function DataManagementPage() {
     setStagedFiles([]);
     toast.success('Upload complete');
     resetUpload();
-  }, [stagedFiles, uploadFile, resetUpload]);
+    // Refresh loaded datasets from server
+    refreshUploadStatus();
+  }, [stagedFiles, uploadFile, resetUpload, refreshUploadStatus]);
 
   const handleExportConfig = useCallback(async () => {
     try {
