@@ -91,7 +91,7 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       >
-        <Route path="/dashboard" element={<DashboardPlaceholder title="Firm Overview" />} />
+        <Route path="/dashboard" element={<FirmOverviewPage />} />
         <Route path="/fee-earners" element={<DashboardPlaceholder title="Fee Earner Performance" />} />
         <Route path="/wip" element={<DashboardPlaceholder title="Work in Progress" />} />
         <Route path="/billing" element={<DashboardPlaceholder title="Billing & Collections" />} />
