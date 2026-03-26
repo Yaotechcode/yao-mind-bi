@@ -18,6 +18,7 @@ import FirmOverviewPage from '@/pages/FirmOverviewPage';
 import FeeEarnerPerformancePage from '@/pages/FeeEarnerPerformancePage';
 import WipDashboardPage from '@/pages/WipDashboardPage';
 import BillingDashboardPage from '@/pages/BillingDashboardPage';
+import MatterAnalysisPage from '@/pages/MatterAnalysisPage';
 
 // Help pages (existing)
 import HelpQueriesPage from '@/pages/HelpQueries';
@@ -98,7 +99,7 @@ function AppRoutes() {
         <Route path="/fee-earners" element={<FeeEarnerPerformancePage />} />
         <Route path="/wip" element={<WipDashboardPage />} />
         <Route path="/billing" element={<BillingDashboardPage />} />
-        <Route path="/matters" element={<DashboardPlaceholder title="Matter Analysis" />} />
+        <Route path="/matters" element={<MatterAnalysisPage />} />
         <Route path="/clients" element={<DashboardPlaceholder title="Client Intelligence" />} />
         <Route path="/settings" element={<DashboardPlaceholder title="Settings" />} />
         <Route path="/data" element={<DashboardPlaceholder title="Data Management" />} />

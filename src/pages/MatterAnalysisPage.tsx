@@ -3,15 +3,14 @@
  * Route: /matters
  */
 
-import { useState, useMemo, useCallback, useRef, Fragment } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useState, useMemo, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Upload } from 'lucide-react';
 import { useDashboardData } from '@/hooks/useDashboardData';
 import { exportPdf, exportCsv } from '@/lib/api-client';
 import type {
   MatterPayload,
   MatterRow,
-  MatterAtRisk,
 } from '@/shared/types/dashboard-payloads';
 
 import {
@@ -48,7 +47,7 @@ const fmtNumber = (v: unknown) =>
 // Main table columns
 // ---------------------------------------------------------------------------
 
-const mainColumns: ColumnDef<MatterRow>[] = [
+const mainColumns: ColumnDef[] = [
   { key: 'matterNumber', header: 'Matter#', sortable: true, minWidth: 90 },
   { key: 'clientName', header: 'Client', sortable: true, minWidth: 120 },
   { key: 'caseType', header: 'Case Type', sortable: true },
@@ -90,12 +89,12 @@ const mainColumns: ColumnDef<MatterRow>[] = [
     align: 'center',
     minWidth: 120,
     render: (v, row) => {
-      if (v == null || row.budget == null) return <span className="text-muted-foreground">—</span>;
+      if (v == null || row['budget'] == null) return <span className="text-muted-foreground">—</span>;
       return (
         <ProgressBar
           value={Number(v)}
           max={100}
-          ragStatus={(row.budgetBurnRag as 'green' | 'amber' | 'red') ?? 'neutral'}
+          ragStatus={(row['budgetBurnRag'] as 'green' | 'amber' | 'red') ?? 'neutral'}
           showLabel
         />
       );
@@ -116,7 +115,7 @@ const mainColumns: ColumnDef<MatterRow>[] = [
     render: (v, row) => (
       <span className="inline-flex items-center gap-1">
         {fmtPct(v)}
-        <RagBadge status={row.realisationRag as 'green' | 'amber' | 'red' | 'neutral'} />
+        <RagBadge status={row['realisationRag'] as 'green' | 'amber' | 'red' | 'neutral'} />
       </span>
     ),
   },
@@ -128,7 +127,7 @@ const mainColumns: ColumnDef<MatterRow>[] = [
     render: (v, row) => (
       <span className="inline-flex items-center gap-1">
         {v != null ? Number(v).toFixed(0) : '—'}
-        <RagBadge status={row.healthRag as 'green' | 'amber' | 'red' | 'neutral'} />
+        <RagBadge status={row['healthRag'] as 'green' | 'amber' | 'red' | 'neutral'} />
       </span>
     ),
   },
@@ -170,22 +169,26 @@ function MatterDetail({ matter }: { matter: MatterRow }) {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KpiCard
           title="Budget Burn"
-          value={matter.budgetBurn != null ? `${matter.budgetBurn.toFixed(0)}%` : '—'}
+          value={matter.budgetBurn}
+          format="percent"
           ragStatus={(matter.budgetBurnRag as 'green' | 'amber' | 'red') ?? 'neutral'}
         />
         <KpiCard
           title="Realisation"
-          value={fmtPct(matter.realisation)}
+          value={matter.realisation}
+          format="percent"
           ragStatus={matter.realisationRag as 'green' | 'amber' | 'red' | 'neutral'}
         />
         <KpiCard
           title="WIP Age"
-          value={fmtDays(matter.wipAge)}
+          value={matter.wipAge}
+          format="days"
           ragStatus="neutral"
         />
         <KpiCard
           title="Margin"
-          value={fmtPct(prof.margin)}
+          value={prof.margin}
+          format="percent"
           ragStatus={prof.margin != null ? (prof.margin >= 30 ? 'green' : prof.margin >= 15 ? 'amber' : 'red') : 'neutral'}
         />
       </div>
@@ -271,29 +274,30 @@ function MatterDetail({ matter }: { matter: MatterRow }) {
 
 export default function MatterAnalysisPage() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
   const tableRef = useRef<HTMLDivElement>(null);
 
   // Filters
-  const [department, setDepartment] = useState('all');
-  const [caseType, setCaseType] = useState('all');
-  const [statuses, setStatuses] = useState<string[]>([]);
-  const [lawyer, setLawyer] = useState('all');
-  const [hasBudget, setHasBudget] = useState('all');
+  const [filterValues, setFilterValues] = useState<Record<string, unknown>>({});
   const [page, setPage] = useState(0);
   const pageSize = 25;
 
+  const department = (filterValues['department'] as string) ?? '';
+  const caseType = (filterValues['caseType'] as string) ?? '';
+  const status = (filterValues['status'] as string) ?? '';
+  const lawyer = (filterValues['lawyer'] as string) ?? '';
+  const hasBudget = (filterValues['hasBudget'] as string) ?? '';
+
   const apiFilters = useMemo(() => ({
-    ...(department !== 'all' && { department }),
-    ...(caseType !== 'all' && { caseType }),
-    ...(statuses.length > 0 && { status: statuses.join(',') }),
-    ...(lawyer !== 'all' && { lawyer }),
-    ...(hasBudget !== 'all' && { hasBudget }),
+    ...(department && { department }),
+    ...(caseType && { caseType }),
+    ...(status && { status }),
+    ...(lawyer && { lawyer }),
+    ...(hasBudget && { hasBudget }),
     limit: pageSize,
     offset: page * pageSize,
-  }), [department, caseType, statuses, lawyer, hasBudget, page]);
+  }), [department, caseType, status, lawyer, hasBudget, page]);
 
-  const { data, isLoading, error } = useDashboardData('matters', apiFilters);
+  const { data, isLoading } = useDashboardData('matter-analysis', apiFilters);
 
   // Filter definitions
   const filterDefs: FilterDef[] = useMemo(() => {
@@ -304,67 +308,57 @@ export default function MatterAnalysisPage() {
         key: 'department',
         label: 'Department',
         type: 'select' as const,
-        value: department,
-        options: [{ value: 'all', label: 'All Departments' }, ...d.filters.departments.map((dep) => ({ value: dep, label: dep }))],
-        onChange: (v: string) => { setDepartment(v); setPage(0); },
+        options: d.filters.departments,
       },
       {
         key: 'caseType',
         label: 'Case Type',
         type: 'select' as const,
-        value: caseType,
-        options: [{ value: 'all', label: 'All Case Types' }, ...d.filters.caseTypes.map((ct) => ({ value: ct, label: ct }))],
-        onChange: (v: string) => { setCaseType(v); setPage(0); },
+        options: d.filters.caseTypes,
       },
       {
         key: 'status',
         label: 'Status',
         type: 'select' as const,
-        value: statuses[0] ?? 'all',
-        options: [{ value: 'all', label: 'All Statuses' }, ...d.filters.statuses.map((s) => ({ value: s, label: s }))],
-        onChange: (v: string) => { setStatuses(v === 'all' ? [] : [v]); setPage(0); },
+        options: d.filters.statuses,
       },
       {
         key: 'lawyer',
         label: 'Lawyer',
         type: 'select' as const,
-        value: lawyer,
-        options: [{ value: 'all', label: 'All Lawyers' }, ...d.filters.lawyers.map((l) => ({ value: l, label: l }))],
-        onChange: (v: string) => { setLawyer(v); setPage(0); },
+        options: d.filters.lawyers,
       },
       {
         key: 'hasBudget',
         label: 'Has Budget',
         type: 'select' as const,
-        value: hasBudget,
-        options: [
-          { value: 'all', label: 'All' },
-          { value: 'yes', label: 'Yes' },
-          { value: 'no', label: 'No' },
-        ],
-        onChange: (v: string) => { setHasBudget(v); setPage(0); },
+        options: ['Yes', 'No'],
       },
     ];
-  }, [data, department, caseType, statuses, lawyer, hasBudget]);
+  }, [data]);
 
   // Client-side filtered data
   const filteredMatters = useMemo(() => {
     if (!data) return [];
     const d = data as MatterPayload;
     let matters = d.matters;
-    if (department !== 'all') matters = matters.filter((m) => m.department === department);
-    if (caseType !== 'all') matters = matters.filter((m) => m.caseType === caseType);
-    if (statuses.length > 0) matters = matters.filter((m) => statuses.includes(m.status));
-    if (lawyer !== 'all') matters = matters.filter((m) => m.responsibleLawyer === lawyer);
-    if (hasBudget === 'yes') matters = matters.filter((m) => m.budget != null);
-    if (hasBudget === 'no') matters = matters.filter((m) => m.budget == null);
+    if (department) matters = matters.filter((m) => m.department === department);
+    if (caseType) matters = matters.filter((m) => m.caseType === caseType);
+    if (status) matters = matters.filter((m) => m.status === status);
+    if (lawyer) matters = matters.filter((m) => m.responsibleLawyer === lawyer);
+    if (hasBudget === 'Yes') matters = matters.filter((m) => m.budget != null);
+    if (hasBudget === 'No') matters = matters.filter((m) => m.budget == null);
     return matters;
-  }, [data, department, caseType, statuses, lawyer, hasBudget]);
+  }, [data, department, caseType, status, lawyer, hasBudget]);
 
   // Scroll to matter in table
-  const handleViewMatter = useCallback((matterNumber: string) => {
+  const handleViewMatter = useCallback(() => {
     tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    // The table expansion is handled by the user clicking the row
+  }, []);
+
+  const handleFilterChange = useCallback((values: Record<string, unknown>) => {
+    setFilterValues(values);
+    setPage(0);
   }, []);
 
   // Export handlers
@@ -373,7 +367,7 @@ export default function MatterAnalysisPage() {
     exportCsv(filteredMatters as unknown as Record<string, unknown>[], keys, 'matter-analysis');
   };
 
-  const handleExportPdf = () => exportPdf('matters', apiFilters);
+  const handleExportPdf = () => { exportPdf('matter-analysis', apiFilters); };
 
   // Case type summary columns
   const caseTypeCols: ColumnDef[] = [
@@ -399,7 +393,7 @@ export default function MatterAnalysisPage() {
   ];
 
   // ── Loading ─────────────────────────────────────────────────────────────
-  if (isLoading) return <DashboardSkeleton title="Matter Analysis" />;
+  if (isLoading) return <DashboardSkeleton />;
 
   // ── Empty ───────────────────────────────────────────────────────────────
   if (!data || !(data as MatterPayload).matters?.length) {
@@ -437,11 +431,10 @@ export default function MatterAnalysisPage() {
                 key={m.matterId}
                 type="warning"
                 title={`Matter ${m.matterNumber} — ${m.clientName} — ${m.caseType}`}
-                message={`Issue: ${m.primaryIssue}`}
-                subtitle={`Responsible: ${m.responsibleLawyer} → ${m.supervisor}`}
+                message={`Issue: ${m.primaryIssue} | Responsible: ${m.responsibleLawyer} → ${m.supervisor}`}
                 action={{
                   label: 'View Detail →',
-                  onClick: () => handleViewMatter(m.matterNumber),
+                  onClick: () => handleViewMatter(),
                 }}
               />
             ))}
@@ -450,12 +443,12 @@ export default function MatterAnalysisPage() {
       )}
 
       {/* Filters */}
-      <FilterBar filters={filterDefs} />
+      <FilterBar filters={filterDefs} values={filterValues} onChange={handleFilterChange} />
 
       {/* Main table */}
       <div ref={tableRef}>
         <SortableTable
-          columns={mainColumns as ColumnDef<Record<string, unknown>>[]}
+          columns={mainColumns}
           data={filteredMatters as unknown as Record<string, unknown>[]}
           defaultSort={{ key: 'healthScore', direction: 'asc' }}
           expandable
