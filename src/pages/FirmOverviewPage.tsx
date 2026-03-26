@@ -33,7 +33,7 @@ import { Upload } from 'lucide-react';
 
 type LeakageRow = FirmOverviewPayload['topLeakageRisks'][number];
 
-const leakageColumns: ColumnDef<LeakageRow>[] = [
+const leakageColumns: ColumnDef[] = [
   { key: 'matterNumber', header: 'Matter #', minWidth: 100 },
   { key: 'clientName', header: 'Client', minWidth: 140 },
   { key: 'lawyerName', header: 'Lawyer', minWidth: 120 },
@@ -63,7 +63,7 @@ const leakageColumns: ColumnDef<LeakageRow>[] = [
 
 type DeptRow = FirmOverviewPayload['departmentSummary'][number];
 
-const deptColumns: ColumnDef<DeptRow>[] = [
+const deptColumns: ColumnDef[] = [
   { key: 'name', header: 'Department', minWidth: 120 },
   {
     key: 'wipValue',
