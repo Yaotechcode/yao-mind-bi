@@ -25,3 +25,8 @@
 # SUPABASE_SERVICE_ROLE_KEY — Supabase service role key (server only, keep secret)
 # MONGODB_URI           — MongoDB Atlas connection string
 # MONGODB_DB_NAME       — MongoDB database name
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
