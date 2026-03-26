@@ -19,6 +19,7 @@ import FeeEarnerPerformancePage from '@/pages/FeeEarnerPerformancePage';
 import WipDashboardPage from '@/pages/WipDashboardPage';
 import BillingDashboardPage from '@/pages/BillingDashboardPage';
 import MatterAnalysisPage from '@/pages/MatterAnalysisPage';
+import DataManagementPage from '@/pages/DataManagementPage';
 
 // Help pages (existing)
 import HelpQueriesPage from '@/pages/HelpQueries';
@@ -102,7 +103,7 @@ function AppRoutes() {
         <Route path="/matters" element={<MatterAnalysisPage />} />
         <Route path="/clients" element={<DashboardPlaceholder title="Client Intelligence" />} />
         <Route path="/settings" element={<DashboardPlaceholder title="Settings" />} />
-        <Route path="/data" element={<DashboardPlaceholder title="Data Management" />} />
+        <Route path="/data" element={<DataManagementPage />} />
 
         {/* Help routes inside layout */}
         <Route path="/help" element={<HelpQueriesPage />} />
