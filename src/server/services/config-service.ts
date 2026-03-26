@@ -116,7 +116,7 @@ function mergeWithDefaults<T extends Record<string, unknown>>(
 async function readRawConfig(firmId: string): Promise<FirmConfig> {
   const { data, error } = await db.server
     .from('firm_config')
-    .select('config')
+    .select('*')
     .eq('firm_id', firmId)
     .single();
 
@@ -127,14 +127,61 @@ async function readRawConfig(firmId: string): Promise<FirmConfig> {
     throw new Error(`No config found for firm ${firmId}. Run seedFirm first.`);
   }
 
-  return data.config as FirmConfig;
+  // Each JSONB column stores a flat subset of FirmConfig fields (camelCase keys).
+  // Spread all blobs together; revenue_attribution is a plain TEXT column.
+  const row = data as Record<string, unknown>;
+  return {
+    ...(row['working_time_defaults'] as Record<string, unknown> ?? {}),
+    ...(row['salaried_config'] as Record<string, unknown> ?? {}),
+    ...(row['fee_share_config'] as Record<string, unknown> ?? {}),
+    revenueAttribution: row['revenue_attribution'] as FirmConfig['revenueAttribution'],
+    ...(row['data_trust_model'] as Record<string, unknown> ?? {}),
+    ...(row['display_preferences'] as Record<string, unknown> ?? {}),
+    ...(row['export_settings'] as Record<string, unknown> ?? {}),
+    ragThresholds: row['rag_thresholds'] as FirmConfig['ragThresholds'],
+    ...(row['overhead_config'] as Record<string, unknown> ?? {}),
+    ...(row['scorecard_weights'] as Record<string, unknown> ?? {}),
+  } as unknown as FirmConfig;
 }
 
 /** Persists an updated config to DB. */
 async function writeConfig(firmId: string, config: FirmConfig): Promise<void> {
   const { error } = await db.server
     .from('firm_config')
-    .update({ config, updated_at: new Date().toISOString() })
+    .update({
+      working_time_defaults: {
+        workingDaysPerWeek: config.workingDaysPerWeek,
+        dailyTargetHours: config.dailyTargetHours,
+        weeklyTargetHours: config.weeklyTargetHours,
+        chargeableWeeklyTarget: config.chargeableWeeklyTarget,
+        annualLeaveEntitlement: config.annualLeaveEntitlement,
+        bankHolidaysPerYear: config.bankHolidaysPerYear,
+      },
+      salaried_config: {
+        costRateMethod: config.costRateMethod,
+        utilisationApproach: config.utilisationApproach,
+        fteCountMethod: config.fteCountMethod,
+      },
+      fee_share_config: {
+        defaultFeeSharePercent: config.defaultFeeSharePercent,
+        defaultFirmRetainPercent: config.defaultFirmRetainPercent,
+      },
+      revenue_attribution: config.revenueAttribution ?? 'responsible_lawyer',
+      data_trust_model: {},
+      display_preferences: {
+        showLawyerPerspective: config.showLawyerPerspective,
+        showDiscrepancies: config.showDiscrepancies,
+      },
+      export_settings: {
+        columnMappingTemplates: config.columnMappingTemplates,
+        customFields: config.customFields,
+        feeEarnerOverrides: config.feeEarnerOverrides,
+      },
+      rag_thresholds: config.ragThresholds,
+      overhead_config: {},
+      scorecard_weights: {},
+      updated_at: new Date().toISOString(),
+    })
     .eq('firm_id', firmId);
 
   if (error) {
