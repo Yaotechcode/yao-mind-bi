@@ -74,6 +74,52 @@ function normalizeFileType(raw: string): string {
   return JSON_SUFFIX_MAP[raw] ?? raw;
 }
 
+/**
+ * Known Metabase/Yao column names that don't camelCase cleanly.
+ * Applied after camelCase normalisation (key is the lowercased camelCase result).
+ */
+const COLUMN_OVERRIDES: Record<string, string> = {
+  clients:   'clientIds',
+  writeoff:  'writeOff',
+  writtenoff: 'writtenOff',
+  vat:       'vat',
+};
+
+/**
+ * Converts any common column naming convention to camelCase:
+ *   "Title Case With Spaces" → "titleCaseWithSpaces"
+ *   "snake_case"             → "snakeCase"
+ *   "PascalCase"             → "pascalCase"
+ *   "alreadyCamel"           → "alreadyCamel"
+ */
+function normaliseToCamelCase(key: string): string {
+  const trimmed = key.trim();
+
+  // Split on spaces or underscores, then join as camelCase
+  const words = trimmed.split(/[\s_]+/);
+  const camel = words
+    .map((word, i) =>
+      i === 0
+        ? word.charAt(0).toLowerCase() + word.slice(1)
+        : word.charAt(0).toUpperCase() + word.slice(1),
+    )
+    .join('');
+
+  // Check override map (lowercase the whole camelCase result for lookup)
+  return COLUMN_OVERRIDES[camel.toLowerCase()] ?? camel;
+}
+
+/** Apply normaliseToCamelCase to every key in every record. */
+function normaliseRecordKeys(
+  records: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  return records.map((record) =>
+    Object.fromEntries(
+      Object.entries(record).map(([k, v]) => [normaliseToCamelCase(k), v]),
+    ),
+  );
+}
+
 /** Extract file part and fileType field from a multipart/form-data body. */
 async function parseMultipartBody(event: HandlerEvent): Promise<{
   fileType: string;
@@ -161,31 +207,41 @@ function buildIdentityMappingSet(
   };
 }
 
-/** Parse file buffer into rows based on fileType. */
+/** Parse file buffer into rows based on fileType, with column name normalisation. */
 function parseFileContent(
   fileType: string,
   content: Buffer,
 ): Record<string, unknown>[] {
   const text = content.toString('utf-8');
 
+  let rows: Record<string, unknown>[];
+
   if (fileType === 'feeEarner') {
     const result = Papa.parse<Record<string, unknown>>(text, {
       header: true,
       skipEmptyLines: true,
     });
-    return result.data;
+    rows = result.data;
+  } else {
+    // JSON types
+    const parsed: unknown = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      rows = parsed as Record<string, unknown>[];
+    } else if (parsed !== null && typeof parsed === 'object') {
+      // Handle wrapped objects e.g. { data: [...] }
+      const obj = parsed as Record<string, unknown>;
+      const firstArray = Object.values(obj).find(Array.isArray);
+      if (firstArray) {
+        rows = firstArray as Record<string, unknown>[];
+      } else {
+        throw new Error('File content is not a JSON array');
+      }
+    } else {
+      throw new Error('File content is not a JSON array');
+    }
   }
 
-  // JSON types
-  const parsed: unknown = JSON.parse(text);
-  if (Array.isArray(parsed)) return parsed as Record<string, unknown>[];
-  // Handle wrapped objects e.g. { data: [...] }
-  if (parsed !== null && typeof parsed === 'object') {
-    const obj = parsed as Record<string, unknown>;
-    const firstArray = Object.values(obj).find(Array.isArray);
-    if (firstArray) return firstArray as Record<string, unknown>[];
-  }
-  throw new Error('File content is not a JSON array');
+  return normaliseRecordKeys(rows);
 }
 
 /** Build a complete ParseResult from raw rows. */
