@@ -472,6 +472,7 @@ export default function DataManagementPage() {
   useEffect(() => {
     refreshUploadStatus();
   }, [refreshUploadStatus]);
+  const [qualityIssues] = useState<QualityIssue[]>([]);
   const [feeEarners] = useState<FeeEarnerRow[]>([]);
   const [mappingTemplates] = useState<MappingTemplateRow[]>([]);
   const [lastExported] = useState<string | null>(null);
