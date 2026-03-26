@@ -251,15 +251,15 @@ export async function uploadFile(
 }
 
 export function fetchConfig(): Promise<FirmConfig> {
-  return apiFetch<FirmConfig>('/config-export');
+  return apiFetch<FirmConfig>('/firm-config');
 }
 
 export function updateConfig(
   path: string,
   value: unknown,
 ): Promise<FirmConfig> {
-  return apiFetch<FirmConfig>('/config-import', {
-    method: 'POST',
+  return apiFetch<FirmConfig>('/firm-config', {
+    method: 'PATCH',
     body: JSON.stringify({ path, value }),
   });
 }
