@@ -440,9 +440,38 @@ export default function DataManagementPage() {
   const [stagedFiles, setStagedFiles] = useState<DetectedFile[]>([]);
   const [uploadProgress, setUploadProgress] = useState(0);
 
-  // Mock data (will be replaced by API calls)
-  const [loadedDatasets] = useState<LoadedDataset[]>([]);
-  const [qualityIssues] = useState<QualityIssue[]>([]);
+  // Upload status from API
+  const [loadedDatasets, setLoadedDatasets] = useState<LoadedDataset[]>([]);
+
+  const refreshUploadStatus = useCallback(async () => {
+    try {
+      const entries = await fetchUploadStatus();
+      // Group by file_type, keep latest per type
+      const byType = new Map<string, UploadStatusEntry>();
+      for (const entry of entries) {
+        const existing = byType.get(entry.file_type);
+        if (!existing || new Date(entry.upload_date) > new Date(existing.upload_date)) {
+          byType.set(entry.file_type, entry);
+        }
+      }
+      const datasets: LoadedDataset[] = Array.from(byType.values()).map((e) => ({
+        fileType: e.file_type,
+        recordCount: e.record_count,
+        dateLoaded: e.upload_date,
+        status: e.status === 'processed' ? 'processed'
+          : e.status === 'error' ? 'failed'
+          : 'processing',
+      }));
+      setLoadedDatasets(datasets);
+    } catch {
+      // Silently fail — table just stays empty
+    }
+  }, []);
+
+  // Fetch on mount
+  useEffect(() => {
+    refreshUploadStatus();
+  }, [refreshUploadStatus]);
   const [feeEarners] = useState<FeeEarnerRow[]>([]);
   const [mappingTemplates] = useState<MappingTemplateRow[]>([]);
   const [lastExported] = useState<string | null>(null);
