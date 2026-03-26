@@ -282,6 +282,24 @@ export async function updateFirmConfig(
   value: unknown,
   userId: string,
 ): Promise<FirmConfig> {
+  if (path.endsWith('.__add__')) {
+    const arrayPath = path.slice(0, -8); // remove '.__add__'
+    const current = await getFirmConfig(firmId);
+    const existingArray = getNestedValue(
+      current as unknown as Record<string, unknown>,
+      arrayPath,
+    ) as unknown[] ?? [];
+    const updated = setNestedValue(
+      current as unknown as Record<string, unknown>,
+      arrayPath,
+      [...existingArray, value],
+    ) as FirmConfig;
+    await writeConfig(firmId, updated);
+    await writeAuditEntry(firmId, userId, AuditAction.UPDATE, 'firm_config',
+      firmId, undefined, { path: arrayPath, action: 'array_append' });
+    return updated;
+  }
+
   const current = await getFirmConfig(firmId);
   const oldValue = getNestedValue(current as unknown as Record<string, unknown>, path);
   const updated = setNestedValue(current as unknown as Record<string, unknown>, path, value) as FirmConfig;
