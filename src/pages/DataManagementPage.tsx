@@ -417,7 +417,7 @@ function FeeEarnerReview({ earners }: { earners: FeeEarnerRow[] }) {
   return (
     <DashboardSection title="Fee Earner Review">
       {earners.length > 0 ? (
-        <SortableTable columns={columns} data={earners as unknown as Record<string, unknown>[]} />
+        <SortableTable columns={columns as unknown as ColumnDef[]} data={earners as unknown as Record<string, unknown>[]} />
       ) : (
         <EmptyState
           title="No fee earners loaded"

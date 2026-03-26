@@ -102,7 +102,7 @@ function AppRoutes() {
         <Route path="/matters" element={<MatterAnalysisPage />} />
         <Route path="/clients" element={<DashboardPlaceholder title="Client Intelligence" />} />
         <Route path="/settings" element={<DashboardPlaceholder title="Settings" />} />
-        <Route path="/data" element={<DashboardPlaceholder title="Data Management" />} />
+        <Route path="/data" element={<DataManagementPage />} />
 
         {/* Help routes inside layout */}
         <Route path="/help" element={<HelpQueriesPage />} />
