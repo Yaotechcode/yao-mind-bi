@@ -41,7 +41,7 @@ export class AuthError extends Error {
 
 /**
  * Extracts and verifies the Bearer token from the Authorization header,
- * then looks up the user's firm_id and role from the user_profiles table.
+ * then looks up the user's firm_id and role from the users table.
  *
  * @throws AuthError(401) if the token is missing, invalid, or expired
  * @throws AuthError(403) if the user profile is not found
@@ -72,9 +72,9 @@ export async function authenticateRequest(event: HandlerEvent): Promise<AuthCont
 
   // Look up user profile for firm_id and role
   const { data: profile, error: profileError } = await db
-    .from('user_profiles')
+    .from('users')
     .select('firm_id, role')
-    .eq('user_id', user.id)
+    .eq('id', user.id)
     .single();
 
   if (profileError || !profile) {
