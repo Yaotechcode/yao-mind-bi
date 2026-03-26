@@ -16,6 +16,7 @@ import DashboardLayout from '@/components/layout/DashboardLayout';
 import { DashboardPlaceholder } from '@/components/layout/DashboardPlaceholder';
 import FirmOverviewPage from '@/pages/FirmOverviewPage';
 import FeeEarnerPerformancePage from '@/pages/FeeEarnerPerformancePage';
+import WipDashboardPage from '@/pages/WipDashboardPage';
 
 // Help pages (existing)
 import HelpQueriesPage from '@/pages/HelpQueries';
@@ -94,7 +95,7 @@ function AppRoutes() {
       >
         <Route path="/dashboard" element={<FirmOverviewPage />} />
         <Route path="/fee-earners" element={<FeeEarnerPerformancePage />} />
-        <Route path="/wip" element={<DashboardPlaceholder title="Work in Progress" />} />
+        <Route path="/wip" element={<WipDashboardPage />} />
         <Route path="/billing" element={<DashboardPlaceholder title="Billing & Collections" />} />
         <Route path="/matters" element={<DashboardPlaceholder title="Matter Analysis" />} />
         <Route path="/clients" element={<DashboardPlaceholder title="Client Intelligence" />} />
