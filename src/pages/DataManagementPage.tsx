@@ -44,7 +44,7 @@ interface LoadedDataset {
   fileType: string;
   recordCount: number;
   dateLoaded: string;
-  status: 'processed' | 'processing' | 'failed';
+  status: 'loaded' | 'processing' | 'failed';
 }
 
 interface QualityIssue {
@@ -93,6 +93,30 @@ const ENTITY_FIELDS: Record<string, string[]> = {
   invoices: ['invoiceNumber', 'matterId', 'matterNumber', 'date', 'total', 'outstanding', 'paid'],
 };
 
+const DATASET_FILE_TYPE_MAP: Record<string, string> = {
+  feeEarner: 'feeEarners',
+  feeEarners: 'feeEarners',
+  wipJson: 'wip',
+  wip: 'wip',
+  fullMattersJson: 'fullMatters',
+  fullMatters: 'fullMatters',
+  closedMattersJson: 'closedMatters',
+  closedMatters: 'closedMatters',
+  invoicesJson: 'invoices',
+  invoices: 'invoices',
+  contactsJson: 'contacts',
+  contacts: 'contacts',
+  contact: 'contacts',
+  disbursementsJson: 'disbursements',
+  disbursements: 'disbursements',
+  tasksJson: 'tasks',
+  tasks: 'tasks',
+};
+
+function normaliseDatasetFileType(fileType: string): string {
+  return DATASET_FILE_TYPE_MAP[fileType] ?? fileType;
+}
+
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
@@ -104,10 +128,10 @@ function FileTypeIcon({ type }: { type: string }) {
   return <FileText className="h-4 w-4 text-icon-main" />;
 }
 
-function StatusIndicator({ status }: { status: 'processed' | 'processing' | 'failed' }) {
+function StatusIndicator({ status }: { status: 'loaded' | 'processing' | 'failed' }) {
   switch (status) {
-    case 'processed':
-      return <span className="inline-flex items-center gap-1 text-success text-xs font-medium"><CheckCircle2 className="h-3.5 w-3.5" /> Processed</span>;
+    case 'loaded':
+      return <span className="inline-flex items-center gap-1 text-success text-xs font-medium"><CheckCircle2 className="h-3.5 w-3.5" /> Loaded</span>;
     case 'processing':
       return <span className="inline-flex items-center gap-1 text-warning text-xs font-medium"><Clock className="h-3.5 w-3.5" /> Processing</span>;
     case 'failed':
@@ -449,16 +473,17 @@ export default function DataManagementPage() {
       // Group by file_type, keep latest per type
       const byType = new Map<string, UploadStatusEntry>();
       for (const entry of entries) {
-        const existing = byType.get(entry.file_type);
+        const fileType = normaliseDatasetFileType(entry.file_type);
+        const existing = byType.get(fileType);
         if (!existing || new Date(entry.upload_date) > new Date(existing.upload_date)) {
-          byType.set(entry.file_type, entry);
+          byType.set(fileType, entry);
         }
       }
-      const datasets: LoadedDataset[] = Array.from(byType.values()).map((e) => ({
-        fileType: e.file_type,
+      const datasets: LoadedDataset[] = Array.from(byType.entries()).map(([fileType, e]) => ({
+        fileType,
         recordCount: e.record_count,
         dateLoaded: e.upload_date,
-        status: e.status === 'processed' ? 'processed'
+        status: e.status === 'processed' ? 'loaded'
           : e.status === 'error' ? 'failed'
           : 'processing',
       }));
@@ -466,6 +491,22 @@ export default function DataManagementPage() {
     } catch {
       // Silently fail — table just stays empty
     }
+  }, []);
+
+  const markDatasetLoaded = useCallback((fileType: string, recordCount: number) => {
+    const normalisedFileType = normaliseDatasetFileType(fileType);
+    const dateLoaded = new Date().toISOString();
+
+    setLoadedDatasets((prev) => {
+      const next = prev.filter((dataset) => dataset.fileType !== normalisedFileType);
+      next.push({
+        fileType: normalisedFileType,
+        recordCount,
+        dateLoaded,
+        status: 'loaded',
+      });
+      return next;
+    });
   }, []);
 
   // Fetch on mount
@@ -530,7 +571,9 @@ export default function DataManagementPage() {
     for (let i = 0; i < stagedFiles.length; i++) {
       const sf = stagedFiles[i];
       try {
-        await uploadFile(sf.file, sf.detectedType);
+        const result = await uploadFile(sf.file, sf.detectedType);
+        await refreshUploadStatus();
+        markDatasetLoaded(sf.detectedType, result.recordCount);
         setUploadProgress(Math.round(((i + 1) / total) * 100));
       } catch {
         toast.error(`Failed to upload ${sf.file.name}`);
@@ -539,9 +582,7 @@ export default function DataManagementPage() {
     setStagedFiles([]);
     toast.success('Upload complete');
     resetUpload();
-    // Refresh loaded datasets from server
-    refreshUploadStatus();
-  }, [stagedFiles, uploadFile, resetUpload, refreshUploadStatus]);
+  }, [stagedFiles, uploadFile, resetUpload, refreshUploadStatus, markDatasetLoaded]);
 
   const handleExportConfig = useCallback(async () => {
     try {
@@ -646,7 +687,7 @@ export default function DataManagementPage() {
             </span>
           );
         }
-        return <StatusIndicator status={v as 'processed' | 'processing' | 'failed'} />;
+        return <StatusIndicator status={v as 'loaded' | 'processing' | 'failed'} />;
       },
     },
     {

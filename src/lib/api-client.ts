@@ -19,6 +19,7 @@ import type { FirmConfig } from '@/shared/types';
 // ---------------------------------------------------------------------------
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/.netlify/functions';
+const UPLOAD_STATUS_URL = import.meta.env.VITE_UPLOAD_STATUS_URL ?? '/netlify/functions/upload-status';
 
 // ---------------------------------------------------------------------------
 // Dashboard type map
@@ -260,8 +261,40 @@ export interface UploadStatusEntry {
   error_message?: string;
 }
 
-export function fetchUploadStatus(limit = 20): Promise<UploadStatusEntry[]> {
-  return apiFetch<UploadStatusEntry[]>(`/upload-status?limit=${limit}`);
+export async function fetchUploadStatus(limit = 20): Promise<UploadStatusEntry[]> {
+  const token = await getAuthToken();
+
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${UPLOAD_STATUS_URL}?limit=${limit}`, { headers });
+  } catch (err) {
+    throw new ApiError(
+      'Network error — please check your connection',
+      0,
+      err,
+    );
+  }
+
+  if (response.status === 401) {
+    window.location.href = '/auth';
+    throw new ApiError('Session expired', 401);
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(
+      (body as { error?: string })?.error ?? `Request failed (${response.status})`,
+      response.status,
+      body,
+    );
+  }
+
+  return response.json() as Promise<UploadStatusEntry[]>;
 }
 
 export function fetchConfig(): Promise<FirmConfig> {
