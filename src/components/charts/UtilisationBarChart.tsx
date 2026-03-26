@@ -52,8 +52,8 @@ export function UtilisationBarChart({ data }: UtilisationBarChartProps) {
         />
         <Tooltip
           formatter={(value: unknown) => [`${Number(value).toFixed(1)}%`, 'Utilisation']}
-          labelFormatter={(_: unknown, payload: unknown[]) => {
-            const p = payload as Array<{ payload?: { name?: string } }>;
+          labelFormatter={(_: unknown, payload: readonly unknown[]) => {
+            const p = payload as ReadonlyArray<{ payload?: { name?: string } }>;
             return p?.[0]?.payload?.name ?? String(_);
           }}
           contentStyle={{ fontSize: 12, borderRadius: 6, border: '1px solid hsl(223 25% 93%)' }}
