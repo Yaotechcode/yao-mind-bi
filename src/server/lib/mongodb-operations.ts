@@ -307,13 +307,13 @@ export async function getUploadById(
 // normalised_datasets
 // ---------------------------------------------------------------------------
 
-const NORMALISED_DATASET_CHUNK_SIZE = 5000;
+const CHUNK_SIZE = 5000;
 
 /**
- * Upsert the normalised dataset for a file type, split into chunks of
- * NORMALISED_DATASET_CHUNK_SIZE records to stay under MongoDB's 16MB limit.
- * Each chunk is keyed on { firm_id, file_type, chunk_index }.
- * Stale chunks from a previous (smaller) upload are deleted after writing.
+ * Store the normalised dataset for a file type in chunks of CHUNK_SIZE records
+ * to stay under MongoDB's 16MB document size limit.
+ * Deletes all existing chunks for the (firm_id, file_type) pair first, then
+ * inserts fresh chunks — avoids replaceOne-with-upsert races on chunk count changes.
  */
 export async function storeNormalisedDataset(
   firmId: string,
@@ -323,42 +323,27 @@ export async function storeNormalisedDataset(
   sourceUploadId: string
 ): Promise<void> {
   const col = await getCollection<NormalisedDatasetDocument>('normalised_datasets');
+
+  // Delete existing chunks for this firm + fileType before writing new ones
+  await col.deleteMany({ firm_id: firmId, file_type: fileType });
+
+  const totalChunks = Math.max(1, Math.ceil(records.length / CHUNK_SIZE));
   const now = new Date();
 
-  const chunks: NormalisedRecord[][] = [];
-  for (let i = 0; i < records.length; i += NORMALISED_DATASET_CHUNK_SIZE) {
-    chunks.push(records.slice(i, i + NORMALISED_DATASET_CHUNK_SIZE));
-  }
-  // Always store at least one chunk (even for empty datasets)
-  if (chunks.length === 0) chunks.push([]);
-
-  const totalChunks = chunks.length;
-
-  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-    const doc: NormalisedDatasetDocument = {
+  for (let i = 0; i < totalChunks; i++) {
+    const chunk = records.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+    await col.insertOne({
       firm_id: firmId,
       file_type: fileType,
       entity_key: entityKey,
       source_upload_id: sourceUploadId,
-      records: chunks[chunkIndex] as Record<string, unknown>[],
+      chunk_index: i,
+      total_chunks: totalChunks,
+      records: chunk as Record<string, unknown>[],
       record_count: records.length,
       normalised_at: now,
-      chunk_index: chunkIndex,
-      total_chunks: totalChunks,
-    };
-    await col.replaceOne(
-      { firm_id: firmId, file_type: fileType, chunk_index: chunkIndex },
-      doc,
-      { upsert: true }
-    );
+    } as NormalisedDatasetDocument);
   }
-
-  // Remove any chunks left over from a previous upload that had more chunks
-  await col.deleteMany({
-    firm_id: firmId,
-    file_type: fileType,
-    chunk_index: { $gte: totalChunks },
-  });
 }
 
 /**
@@ -370,20 +355,19 @@ export async function getAllNormalisedDatasets(
   firmId: string
 ): Promise<Record<string, NormaliseResult>> {
   const col = await getCollection<NormalisedDatasetDocument>('normalised_datasets');
-  // Sort ascending by chunk_index so chunks arrive in order
+  // Sort by chunk_index ascending so chunks arrive in order within each file_type
   const docs = await col.find({ firm_id: firmId }).sort({ chunk_index: 1 }).toArray();
 
   const result: Record<string, NormaliseResult> = {};
   for (const doc of docs) {
     if (result[doc.file_type]) {
-      // Subsequent chunks — append records
-      const existing = result[doc.file_type];
-      existing.records = [
-        ...existing.records,
+      // Subsequent chunk — append records
+      result[doc.file_type].records = [
+        ...result[doc.file_type].records,
         ...(doc.records as NormalisedRecord[]),
       ];
     } else {
-      // First (or only) chunk — initialise entry
+      // First (or only) chunk — initialise entry with the stored total record_count
       result[doc.file_type] = {
         fileType: doc.entity_key,
         records: doc.records as NormalisedRecord[],

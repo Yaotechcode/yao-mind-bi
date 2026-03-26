@@ -519,6 +519,14 @@ export const handler: Handler = async (event) => {
       return { statusCode: err.statusCode, body: JSON.stringify({ error: err.message }) };
     }
     console.error('[upload]', err);
-    return { statusCode: 500, body: JSON.stringify({ error: 'Internal server error' }) };
+    return {
+      statusCode: 500,
+      body: JSON.stringify({
+        error: err instanceof Error ? err.message : 'Internal server error',
+        stack: process.env['NODE_ENV'] !== 'production'
+          ? (err instanceof Error ? err.stack : undefined)
+          : undefined,
+      }),
+    };
   }
 };
