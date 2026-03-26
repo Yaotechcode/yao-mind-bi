@@ -46,12 +46,26 @@ function setNestedValue(obj: unknown, path: string, value: unknown): unknown {
 
   if (Array.isArray(obj)) {
     const index = parseInt(key, 10);
-    if (isNaN(index)) {
-      throw new Error(`Expected numeric index in path, got "${key}"`);
+    if (!isNaN(index)) {
+      // Numeric index — existing behaviour
+      const arr = [...obj];
+      arr[index] = rest ? setNestedValue(arr[index], rest, value) : value;
+      return arr;
     }
-    const arr = [...obj];
-    arr[index] = rest ? setNestedValue(arr[index], rest, value) : value;
-    return arr;
+    // Non-numeric segment: treat as metricKey lookup
+    const arr = obj as Array<Record<string, unknown>>;
+    const idx = arr.findIndex((el) => el['metricKey'] === key);
+    if (idx === -1) {
+      // Append new element with metricKey set to key
+      const newEl: Record<string, unknown> = { metricKey: key };
+      const inserted = rest ? setNestedValue(newEl, rest, value) : value;
+      return [...arr, inserted];
+    }
+    const updated = [...arr];
+    updated[idx] = rest
+      ? (setNestedValue(updated[idx], rest, value) as Record<string, unknown>)
+      : (value as Record<string, unknown>);
+    return updated;
   }
 
   const record = (obj ?? {}) as Record<string, unknown>;
@@ -68,7 +82,11 @@ function getNestedValue(obj: unknown, path: string): unknown {
     if (curr == null || typeof curr !== 'object') return undefined;
     if (Array.isArray(curr)) {
       const index = parseInt(key, 10);
-      return isNaN(index) ? undefined : curr[index];
+      if (!isNaN(index)) return curr[index];
+      // Non-numeric segment: metricKey lookup
+      return (curr as Array<Record<string, unknown>>).find(
+        (el) => el['metricKey'] === key,
+      );
     }
     return (curr as Record<string, unknown>)[key];
   }, obj);
@@ -202,15 +220,30 @@ async function writeAuditEntry(
   diff?: Record<string, { before: unknown; after: unknown }>,
   metadata?: Record<string, unknown>,
 ): Promise<void> {
+  // Extract old_value / new_value from the first diff entry (if any)
+  const firstDiffEntry = diff ? Object.values(diff)[0] : undefined;
+  const oldValue = firstDiffEntry?.before ?? null;
+  const newValue = firstDiffEntry?.after ?? null;
+
+  // Extract path and description from metadata
+  const path = typeof metadata?.['path'] === 'string' ? metadata['path'] : null;
+  const description =
+    typeof metadata?.['action'] === 'string'
+      ? metadata['action']
+      : metadata
+        ? JSON.stringify(metadata)
+        : null;
+
   const { error } = await db.server.from('audit_log').insert({
     firm_id: firmId,
     user_id: userId,
     action,
     entity_type: entityType,
     entity_id: entityId,
-    diff: diff ?? null,
-    metadata: metadata ?? null,
-    timestamp: new Date().toISOString(),
+    path,
+    old_value: oldValue,
+    new_value: newValue,
+    description,
   });
 
   // Audit log errors are non-fatal: log but don't block the caller.
