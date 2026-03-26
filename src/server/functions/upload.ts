@@ -31,15 +31,26 @@ const VALID_FILE_TYPES = new Set([
   'invoicesJson', 'contactsJson', 'disbursementsJson', 'tasksJson',
 ]);
 
-// Frontend may omit the 'Json' suffix — normalise to the canonical key
+// Frontend may omit the 'Json' suffix, or send plural/alternate forms.
+// All variants normalise to the canonical VALID_FILE_TYPES key.
 const JSON_SUFFIX_MAP: Record<string, string> = {
-  fullMatters:   'fullMattersJson',
-  closedMatters: 'closedMattersJson',
-  wip:           'wipJson',
-  invoices:      'invoicesJson',
-  contacts:      'contactsJson',
-  disbursements: 'disbursementsJson',
-  tasks:         'tasksJson',
+  // Without 'Json' suffix
+  fullMatters:    'fullMattersJson',
+  closedMatters:  'closedMattersJson',
+  wip:            'wipJson',
+  invoices:       'invoicesJson',
+  contacts:       'contactsJson',
+  disbursements:  'disbursementsJson',
+  tasks:          'tasksJson',
+  // Plural / alternate forms
+  feeEarners:     'feeEarner',
+  matters:        'fullMattersJson',
+  lawyerTime:     'wipJson',
+  lawyers:        'wipJson',
+  invoice:        'invoicesJson',
+  contact:        'contactsJson',
+  disbursement:   'disbursementsJson',
+  task:           'tasksJson',
 };
 
 const FILE_TYPE_TO_ENTITY: Record<string, EntityType> = {
@@ -215,12 +226,10 @@ function parseFileContent(
   const text = content.toString('utf-8');
   const trimmed = text.trimStart();
 
-  // Detect format: content-first, then fall back to fileType convention.
-  // Any file starting with '{' or '[' is treated as JSON regardless of fileType.
-  // Anything else (including feeEarner and non-Json fileTypes) is treated as CSV.
-  const looksLikeJson = trimmed.startsWith('{') || trimmed.startsWith('[');
-  const isJsonFileType = fileType.endsWith('Json');
-  const treatAsJson = looksLikeJson || isJsonFileType;
+  // Detect format by content only — files starting with '{' or '[' are JSON,
+  // everything else (CSV, feeEarner, unknown types) goes through Papa.parse.
+  const isJson = trimmed.startsWith('{') || trimmed.startsWith('[');
+  const treatAsJson = isJson;
 
   let rows: Record<string, unknown>[];
 
@@ -241,7 +250,7 @@ function parseFileContent(
       throw new Error('File content is not a JSON array');
     }
   } else {
-    // CSV — feeEarner and any non-Json fileType
+    // CSV — feeEarner, unknown types, and any non-JSON content
     const result = Papa.parse<Record<string, unknown>>(text, {
       header: true,
       skipEmptyLines: true,
