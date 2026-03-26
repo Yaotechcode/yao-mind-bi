@@ -86,14 +86,18 @@ export const handler: Handler = async (event) => {
     // Fetch enough history to cover at least one entry per dataset type
     const history = await getUploadHistory(firmId, Math.max(limit, DATASETS.length * 3));
 
-    // Pick the most recent upload per fileType — prefer 'processed', fall back to 'processing'
+    // Pick the most recent upload per fileType — prefer 'processed', fall back to
+    // 'processing' or 'pending' (pending = stored but background function not yet started)
     const latestProcessedByType = new Map<string, typeof history[number]>();
     const latestProcessingByType = new Map<string, typeof history[number]>();
     for (const upload of history) {
       if (upload.status === 'processed' && !latestProcessedByType.has(upload.file_type)) {
         latestProcessedByType.set(upload.file_type, upload);
       }
-      if (upload.status === 'processing' && !latestProcessingByType.has(upload.file_type)) {
+      if (
+        (upload.status === 'processing' || upload.status === 'pending') &&
+        !latestProcessingByType.has(upload.file_type)
+      ) {
         latestProcessingByType.set(upload.file_type, upload);
       }
     }

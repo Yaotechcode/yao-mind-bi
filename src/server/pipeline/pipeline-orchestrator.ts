@@ -532,93 +532,99 @@ export async function runFullPipeline(
     }
   }
 
-  // ── Stage 3: Cross-Reference ──────────────────────────────────────────────
-  const existingDatasets = await getAllNormalisedDatasets(firmId);
-  const allDatasets: Record<string, NormaliseResult> = {
-    ...existingDatasets,
-    [fileType]: normaliseResult,
-  };
+  try {
+    // ── Stage 3: Cross-Reference ────────────────────────────────────────────
+    const existingDatasets = await getAllNormalisedDatasets(firmId);
+    const allDatasets: Record<string, NormaliseResult> = {
+      ...existingDatasets,
+      [fileType]: normaliseResult,
+    };
 
-  const existingSerialised = await getCrossReferenceRegistry(firmId);
-  const existingRegistry = existingSerialised ? deserialiseRegistry(existingSerialised) : undefined;
-  const updatedRegistry = buildCrossReferenceRegistry(firmId, allDatasets, existingRegistry);
-  const enrichedDatasets = applyRegistryToDatasets(allDatasets, updatedRegistry);
-  await storeCrossReferenceRegistry(firmId, serialiseRegistry(updatedRegistry));
-  stagesCompleted.push('crossReference');
+    const existingSerialised = await getCrossReferenceRegistry(firmId);
+    const existingRegistry = existingSerialised ? deserialiseRegistry(existingSerialised) : undefined;
+    const updatedRegistry = buildCrossReferenceRegistry(firmId, allDatasets, existingRegistry);
+    const enrichedDatasets = applyRegistryToDatasets(allDatasets, updatedRegistry);
+    await storeCrossReferenceRegistry(firmId, serialiseRegistry(updatedRegistry));
+    stagesCompleted.push('crossReference');
 
-  // ── Stage 4: Index ────────────────────────────────────────────────────────
-  const indexes = buildIndexes(enrichedDatasets, Object.keys(enrichedDatasets));
-  stagesCompleted.push('index');
+    // ── Stage 4: Index ──────────────────────────────────────────────────────
+    const indexes = buildIndexes(enrichedDatasets, Object.keys(enrichedDatasets));
+    stagesCompleted.push('index');
 
-  // ── Stage 5: Join ─────────────────────────────────────────────────────────
-  const rawJoinResult = joinRecords(enrichedDatasets, indexes);
-  stagesCompleted.push('join');
+    // ── Stage 5: Join ───────────────────────────────────────────────────────
+    const rawJoinResult = joinRecords(enrichedDatasets, indexes);
+    stagesCompleted.push('join');
 
-  // ── Stage 6: Enrich ───────────────────────────────────────────────────────
-  const joinResult = enrichRecords(rawJoinResult, new Date());
-  stagesCompleted.push('enrich');
+    // ── Stage 6: Enrich ─────────────────────────────────────────────────────
+    const joinResult = enrichRecords(rawJoinResult, new Date());
+    stagesCompleted.push('enrich');
 
-  // ── Stage 7: Aggregate ────────────────────────────────────────────────────
-  const availableFileTypes = Object.keys(allDatasets);
-  const aggregateResult = aggregate(joinResult, new Date(), availableFileTypes);
-  stagesCompleted.push('aggregate');
+    // ── Stage 7: Aggregate ──────────────────────────────────────────────────
+    const availableFileTypes = Object.keys(allDatasets);
+    const aggregateResult = aggregate(joinResult, new Date(), availableFileTypes);
+    stagesCompleted.push('aggregate');
 
-  // ── Persist ───────────────────────────────────────────────────────────────
-  await storeNormalisedDataset(
-    firmId,
-    fileType,
-    entityKey,
-    enrichedDatasets[fileType]?.records ?? normaliseResult.records,
-    uploadId
-  );
+    // ── Persist ─────────────────────────────────────────────────────────────
+    await storeNormalisedDataset(
+      firmId,
+      fileType,
+      entityKey,
+      enrichedDatasets[fileType]?.records ?? normaliseResult.records,
+      uploadId
+    );
 
-  // Store join-enriched records for every entity type produced by the pipeline.
-  // This ensures enriched_entities contains fully resolved records (with fields
-  // like hasMatchedMatter, isChargeable, isOverdue, etc.) that the data API
-  // can filter on directly.
-  const joinEntityStore: Array<{ records: unknown[]; etype: string }> = [
-    { records: joinResult.timeEntries, etype: 'timeEntry' },
-    { records: joinResult.matters,     etype: 'matter' },
-    { records: joinResult.feeEarners,  etype: 'feeEarner' },
-    { records: joinResult.invoices,    etype: 'invoice' },
-    { records: joinResult.clients,     etype: 'client' },
-    { records: joinResult.disbursements, etype: 'disbursement' },
-    { records: joinResult.tasks,       etype: 'task' },
-    { records: joinResult.departments, etype: 'department' },
-  ];
-  for (const { records, etype } of joinEntityStore) {
-    if (records.length > 0) {
-      await storeEnrichedEntities(
-        firmId,
-        etype,
-        records as Record<string, unknown>[],
-        [uploadId],
-        etype === entityKey ? {
-          quality_score: aggregateResult.dataQuality.overallScore,
-          issue_count: aggregateResult.dataQuality.entityIssues.length,
-          issues: aggregateResult.dataQuality.entityIssues,
-        } : undefined
-      );
+    // Store join-enriched records for every entity type produced by the pipeline.
+    // This ensures enriched_entities contains fully resolved records (with fields
+    // like hasMatchedMatter, isChargeable, isOverdue, etc.) that the data API
+    // can filter on directly.
+    const joinEntityStore: Array<{ records: unknown[]; etype: string }> = [
+      { records: joinResult.timeEntries,   etype: 'timeEntry' },
+      { records: joinResult.matters,       etype: 'matter' },
+      { records: joinResult.feeEarners,    etype: 'feeEarner' },
+      { records: joinResult.invoices,      etype: 'invoice' },
+      { records: joinResult.clients,       etype: 'client' },
+      { records: joinResult.disbursements, etype: 'disbursement' },
+      { records: joinResult.tasks,         etype: 'task' },
+      { records: joinResult.departments,   etype: 'department' },
+    ];
+    for (const { records, etype } of joinEntityStore) {
+      if (records.length > 0) {
+        await storeEnrichedEntities(
+          firmId,
+          etype,
+          records as Record<string, unknown>[],
+          [uploadId],
+          etype === entityKey ? {
+            quality_score: aggregateResult.dataQuality.overallScore,
+            issue_count: aggregateResult.dataQuality.entityIssues.length,
+            issues: aggregateResult.dataQuality.entityIssues,
+          } : undefined
+        );
+      }
     }
+
+    await storeCalculatedKpis(
+      firmId,
+      { aggregate: aggregateResult as unknown as Record<string, unknown>, generatedAt: new Date().toISOString() },
+      'pending',
+      new Date().toISOString()
+    );
+
+    await setRecalculationFlag(firmId);
+    await updateUploadStatus(firmId, uploadId, 'processed');
+
+    return {
+      uploadId,
+      stagesCompleted,
+      warnings,
+      recordsProcessed: normaliseResult.recordCount,
+      recordsPersisted: normaliseResult.recordCount,
+      duration_ms: Date.now() - startTime,
+    };
+
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await updateUploadStatus(firmId, uploadId, 'error', msg);
+    throw err;
   }
-
-  await storeCalculatedKpis(
-    firmId,
-    { aggregate: aggregateResult as unknown as Record<string, unknown>, generatedAt: new Date().toISOString() },
-    'pending',
-    new Date().toISOString()
-  );
-
-  await setRecalculationFlag(firmId);
-
-  await updateUploadStatus(firmId, uploadId, 'processed');
-
-  return {
-    uploadId,
-    stagesCompleted,
-    warnings,
-    recordsProcessed: normaliseResult.recordCount,
-    recordsPersisted: normaliseResult.recordCount,
-    duration_ms: Date.now() - startTime,
-  };
 }
