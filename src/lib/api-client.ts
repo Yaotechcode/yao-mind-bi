@@ -250,6 +250,20 @@ export async function uploadFile(
   return response.json() as Promise<UploadResult>;
 }
 
+export interface UploadStatusEntry {
+  _id: string;
+  file_type: string;
+  original_filename: string;
+  upload_date: string;
+  record_count: number;
+  status: 'pending' | 'processing' | 'processed' | 'error' | 'deleted';
+  error_message?: string;
+}
+
+export function fetchUploadStatus(limit = 20): Promise<UploadStatusEntry[]> {
+  return apiFetch<UploadStatusEntry[]>(`/upload-status?limit=${limit}`);
+}
+
 export function fetchConfig(): Promise<FirmConfig> {
   return apiFetch<FirmConfig>('/firm-config');
 }
