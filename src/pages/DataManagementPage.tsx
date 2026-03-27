@@ -615,7 +615,48 @@ export default function DataManagementPage() {
     input.click();
   }, []);
 
-  const handleDeleteDataset = useCallback(
+  // Run Calculations
+  const handleRunCalculations = useCallback(async () => {
+    setIsCalculating(true);
+    try {
+      await triggerCalculation(true);
+      // Poll status every 3 seconds
+      pollRef.current = setInterval(async () => {
+        try {
+          const status = await fetchCalculationStatus();
+          if (status.isStale === false && !status.inProgress) {
+            // current
+            clearInterval(pollRef.current!);
+            pollRef.current = null;
+            setIsCalculating(false);
+            toast.success('Calculations complete');
+          }
+          if ((status as Record<string, unknown>).status === 'error' || ((status as Record<string, unknown>).error)) {
+            clearInterval(pollRef.current!);
+            pollRef.current = null;
+            setIsCalculating(false);
+            toast.error((status as Record<string, unknown>).error as string ?? 'Calculation failed');
+          }
+        } catch {
+          clearInterval(pollRef.current!);
+          pollRef.current = null;
+          setIsCalculating(false);
+          toast.error('Failed to check calculation status');
+        }
+      }, 3000);
+    } catch {
+      setIsCalculating(false);
+      toast.error('Failed to trigger calculations');
+    }
+  }, []);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
     (fileType: string) => {
       if (deleteConfirm !== fileType) {
         setDeleteConfirm(fileType);
