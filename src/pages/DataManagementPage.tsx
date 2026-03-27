@@ -18,7 +18,8 @@ import { AlertCard } from '@/components/common/AlertCard';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ProgressBar } from '@/components/common/ProgressBar';
 import { useUpload } from '@/hooks/useUpload';
-import { fetchConfig, updateConfig, fetchUploadStatus, triggerCalculation, fetchCalculationStatus, type UploadStatusEntry } from '@/lib/api-client';
+import { fetchConfig, updateConfig, fetchUploadStatus, triggerCalculation, type UploadStatusEntry } from '@/lib/api-client';
+import { supabase } from '@/integrations/supabase/client';
 
 // ---------------------------------------------------------------------------
 // Types
