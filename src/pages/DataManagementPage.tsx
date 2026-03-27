@@ -512,6 +512,7 @@ export default function DataManagementPage() {
   // Run Calculations state
   const [isCalculating, setIsCalculating] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   // Detect file type from name/extension
   const detectFileType = useCallback((file: File): DetectedFile => {
