@@ -4,7 +4,7 @@
  * Bridges the gap between data upload (1B) and dashboard display (1E).
  * Triggers a full formula-engine recalculation and reports its status.
  *
- *   POST /api/calculate           → run (or skip if current + force=false)
+ *   POST /api/calculate           → fire background calculation, return { status:'calculating' }
  *   POST /api/calculate/affected  → recalculate specific formulas
  *   GET  /api/calculate/status    → return current calculation status
  *
@@ -12,11 +12,14 @@
  *   1. Authenticate → firmId
  *   2. Check stale flag
  *   3. If not stale and force=false → return { status:'current', calculatedAt }
- *   4. Set is_calculating flag
+ *   4. Call setCalculationInProgress(firmId)
+ *   5. Fire POST to run-calculations-background (fire-and-forget)
+ *   6. Return { status:'calculating' } immediately
+ *
+ * The background function (run-calculations-background.ts) handles steps 5–8:
  *   5. Run CalculationOrchestrator.calculateAll(firmId)
  *   6. Create daily historical snapshot (at most once per UTC day)
- *   7. Return { status:'complete', calculatedAt, kpiSummary }
- *   8. On error → record last_error, return 500
+ *   7. On error → call setCalculationError(firmId, message)
  *
  * GET /api/calculate/status derives status from recalculation_flags:
  *   is_calculating = true          → 'calculating'
@@ -32,10 +35,7 @@ import { successResponse, errorResponse } from '../lib/response-helpers.js';
 import {
   getRecalculationFlag,
   getLatestCalculatedKpis,
-  createHistoricalSnapshot,
-  getTodayHistoricalSnapshot,
   setCalculationInProgress,
-  setCalculationError,
 } from '../lib/mongodb-operations.js';
 
 // ---------------------------------------------------------------------------
@@ -200,53 +200,22 @@ export const handler: Handler = async (event) => {
       return successResponse(response);
     }
 
-    // Mark as calculating
+    // Mark as calculating before firing background task
     await setCalculationInProgress(firmId);
 
-    try {
-      const orchestrator = new CalculationOrchestrator();
-      const result = await orchestrator.calculateAll(firmId);
+    // Fire-and-forget background function — do NOT await
+    const siteUrl = process.env['URL'] ?? 'http://localhost:8888';
+    const bgUrl = `${siteUrl}/.netlify/functions/run-calculations-background`;
+    const internalSecret = process.env['INTERNAL_API_SECRET'] ?? '';
+    void fetch(bgUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-internal-secret': internalSecret },
+      body: JSON.stringify({ firmId }),
+    }).catch((err: unknown) => {
+      console.error('[calculate] failed to trigger background function', err);
+    });
 
-      // Create daily historical snapshot if none exists for today
-      const existingSnapshot = await getTodayHistoricalSnapshot(firmId);
-      if (!existingSnapshot) {
-        const ragSummary = result.ragSummary as Record<string, unknown>;
-        await createHistoricalSnapshot(firmId, 'daily', {
-          firmId,
-          calculatedAt:  result.calculatedAt,
-          dataVersion:   result.dataVersion,
-          configVersion: result.configVersion,
-          formulaCount:  result.formulaCount,
-          successCount:  result.successCount,
-          errorCount:    result.errorCount,
-          ragSummary:    ragSummary ?? {},
-        });
-      }
-
-      const rag = result.ragSummary as { green?: number; amber?: number; red?: number } | undefined;
-
-      const response: CompleteResponse = {
-        status: 'complete',
-        calculatedAt: result.calculatedAt,
-        kpiSummary: {
-          formulaCount:         result.formulaCount,
-          successCount:         result.successCount,
-          errorCount:           result.errorCount,
-          blockedCount:         result.executionPlan.skippedFormulas.length,
-          totalExecutionTimeMs: result.totalExecutionTimeMs,
-          ragSummaryGreen:      rag?.green ?? 0,
-          ragSummaryAmber:      rag?.amber ?? 0,
-          ragSummaryRed:        rag?.red ?? 0,
-        },
-      };
-      return successResponse(response);
-
-    } catch (calcErr) {
-      const errMsg = calcErr instanceof Error ? calcErr.message : String(calcErr);
-      await setCalculationError(firmId, errMsg);
-      console.error('[calculate] Calculation failed:', calcErr);
-      return errorResponse('Calculation failed', 500, { message: errMsg });
-    }
+    return successResponse({ status: 'calculating' });
 
   } catch (err) {
     if (err instanceof AuthError) {
