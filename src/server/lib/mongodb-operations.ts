@@ -144,27 +144,39 @@ export async function getUploadHistory(
 // enriched_entities
 // ---------------------------------------------------------------------------
 
+const ENRICHED_CHUNK_SIZE = 2000;
+
 /**
- * Return the most recently created enriched-entity snapshot for a given
- * firm + entity type, or null if none exists.
+ * Load all chunks for a firm + entity type, reassemble in chunk_index order,
+ * and return a single synthetic document with the combined records array.
+ * Returns null if no chunks exist for this entity type.
  */
 export async function getLatestEnrichedEntities(
   firmId: string,
   entityType: string
 ): Promise<EnrichedEntitiesDocument | null> {
   const col = await getCollection<EnrichedEntitiesDocument>('enriched_entities');
-  const results = await col
+  const chunks = await col
     .find({ firm_id: firmId, entity_type: entityType })
-    .sort({ data_version: -1 })
-    .limit(1)
+    .sort({ chunk_index: 1 })
     .toArray();
-  return results[0] ?? null;
+
+  if (chunks.length === 0) return null;
+
+  // Combine all chunk records into a single synthetic document
+  const first = chunks[0];
+  const allRecords = chunks.flatMap(c => c.records);
+  return {
+    ...first,
+    records: allRecords,
+    record_count: first.record_count, // total count is stored on every chunk
+  };
 }
 
 /**
- * Upsert the enriched-entity snapshot for a firm + entity type.
- * Uses replaceOne with upsert so only one document per (firm_id, entity_type)
- * ever exists — prevents unbounded accumulation of duplicate snapshots.
+ * Store enriched entity records in chunks of ENRICHED_CHUNK_SIZE to stay
+ * under MongoDB's 16MB document limit. Deletes all existing chunks for the
+ * (firm_id, entity_type) pair first, then inserts fresh chunks.
  */
 export async function storeEnrichedEntities(
   firmId: string,
@@ -174,27 +186,36 @@ export async function storeEnrichedEntities(
   dataQuality?: EnrichedEntitiesDocument['data_quality']
 ): Promise<void> {
   const col = await getCollection<EnrichedEntitiesDocument>('enriched_entities');
-  const doc: EnrichedEntitiesDocument = {
-    firm_id: firmId,
-    entity_type: entityType,
-    data_version: new Date().toISOString(),
-    source_uploads: sourceUploads,
-    records,
-    record_count: records.length,
-    data_quality: dataQuality,
-    created_at: new Date(),
-  };
-  await col.replaceOne(
-    { firm_id: firmId, entity_type: entityType },
-    doc as Parameters<typeof col.replaceOne>[1],
-    { upsert: true },
-  );
+
+  // Delete ALL existing chunks before writing fresh ones
+  await col.deleteMany({ firm_id: firmId, entity_type: entityType });
+
+  const totalChunks = Math.max(1, Math.ceil(records.length / ENRICHED_CHUNK_SIZE));
+  const dataVersion = new Date().toISOString();
+  const now = new Date();
+
+  for (let i = 0; i < totalChunks; i++) {
+    const chunk = records.slice(i * ENRICHED_CHUNK_SIZE, (i + 1) * ENRICHED_CHUNK_SIZE);
+    await col.insertOne({
+      firm_id: firmId,
+      entity_type: entityType,
+      data_version: dataVersion,
+      chunk_index: i,
+      total_chunks: totalChunks,
+      source_uploads: sourceUploads,
+      records: chunk,
+      record_count: records.length, // total across all chunks — stored on every chunk
+      data_quality: i === 0 ? dataQuality : undefined,
+      created_at: now,
+    } as EnrichedEntitiesDocument);
+  }
 }
 
 /**
- * One-time cleanup: for each entity type, keep only the document with the
- * highest record_count and delete all others. Call this once to fix
- * collections that accumulated duplicates before replaceOne was in place.
+ * One-time cleanup: for each entity type, keep the chunk set with the highest
+ * record_count and delete all others. Works for both old single-doc format
+ * (no chunk_index) and new multi-chunk format — all docs in a set share the
+ * same record_count, so we delete every doc whose record_count is below the max.
  */
 export async function cleanupDuplicateEnrichedEntities(firmId: string): Promise<void> {
   const col = await getCollection<EnrichedEntitiesDocument>('enriched_entities');
@@ -206,29 +227,33 @@ export async function cleanupDuplicateEnrichedEntities(firmId: string): Promise<
   ];
 
   for (const entityType of entityTypes) {
-    // Project only _id and record_count — do NOT fetch the full records array.
-    // This avoids the "Sort exceeded memory limit" error from sorting large docs.
+    // Project only lightweight fields — never fetch the full records array
     const docs = await col
       .find(
         { firm_id: firmId, entity_type: entityType },
-        { projection: { _id: 1, record_count: 1 } },
+        { projection: { _id: 1, record_count: 1, chunk_index: 1 } },
       )
       .toArray();
 
-    if (docs.length <= 1) continue;
+    if (docs.length === 0) {
+      console.log(`[cleanup] ${entityType}: no documents found`);
+      continue;
+    }
 
-    // Find the doc with the highest record_count in JS memory
-    const best = docs.reduce((a, b) =>
-      (a.record_count ?? 0) >= (b.record_count ?? 0) ? a : b,
-    );
+    // Find the max record_count — all chunks in the same set share this value
+    const maxCount = Math.max(...docs.map(d => d.record_count ?? 0));
 
+    // Delete every doc whose record_count is below the max (stale chunk sets)
     const idsToDelete = docs
-      .filter(d => !new ObjectId(d._id!.toString()).equals(new ObjectId(best._id!.toString())))
+      .filter(d => (d.record_count ?? 0) < maxCount)
       .map(d => new ObjectId(d._id!.toString()));
 
     if (idsToDelete.length > 0) {
       const result = await col.deleteMany({ firm_id: firmId, _id: { $in: idsToDelete } });
-      console.log(`[cleanup] ${entityType}: deleted ${result.deletedCount} duplicate(s), kept 1 (record_count=${best.record_count ?? 0})`);
+      const kept = docs.length - idsToDelete.length;
+      console.log(`[cleanup] ${entityType}: deleted ${result.deletedCount} stale doc(s), kept ${kept} chunk(s) (record_count=${maxCount})`);
+    } else {
+      console.log(`[cleanup] ${entityType}: ${docs.length} doc(s), all current (record_count=${maxCount})`);
     }
   }
 }

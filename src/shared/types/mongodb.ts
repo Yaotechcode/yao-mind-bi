@@ -30,18 +30,28 @@ export interface RawUploadDocument {
   chunks_received?: number;
 }
 
-// enriched_entities — one document per (firm, entity_type, data_version)
+// enriched_entities — one or more chunk documents per (firm_id, entity_type).
+// Large datasets are split into ENRICHED_CHUNK_SIZE-record chunks to stay
+// under MongoDB's 16MB document limit. chunk_index/total_chunks follow the
+// same pattern as normalised_datasets. record_count is the TOTAL across all
+// chunks, stored on every chunk so cleanup can compare sets without fetching
+// records. Callers reassemble chunks ordered by chunk_index.
 export interface EnrichedEntitiesDocument {
   _id?: ObjectId;
   firm_id: string;
   /** Matches EntityType enum values, e.g. 'feeEarner', 'matter' */
   entity_type: string;
-  /** ISO timestamp string used as an immutable version key */
-  data_version: string;
+  /** ISO timestamp string — set when the chunk set is written */
+  data_version?: string;
   /** Array of raw_uploads _id strings that contributed to this version */
   source_uploads: string[];
   records: Record<string, unknown>[];
+  /** TOTAL record count across all chunks for this entity type */
   record_count: number;
+  /** Zero-based chunk index within this entity type's dataset */
+  chunk_index?: number;
+  /** Total number of chunks for this entity type dataset */
+  total_chunks?: number;
   data_quality?: {
     quality_score: number;
     issue_count: number;
