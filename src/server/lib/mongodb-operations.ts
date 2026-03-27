@@ -206,23 +206,29 @@ export async function cleanupDuplicateEnrichedEntities(firmId: string): Promise<
   ];
 
   for (const entityType of entityTypes) {
-    // Sort by record_count DESC, data_version DESC as tiebreak — keep the first
+    // Project only _id and record_count — do NOT fetch the full records array.
+    // This avoids the "Sort exceeded memory limit" error from sorting large docs.
     const docs = await col
-      .find({ firm_id: firmId, entity_type: entityType })
-      .sort({ record_count: -1, data_version: -1 })
+      .find(
+        { firm_id: firmId, entity_type: entityType },
+        { projection: { _id: 1, record_count: 1 } },
+      )
       .toArray();
 
     if (docs.length <= 1) continue;
 
-    const [, ...duplicates] = docs;
-    const idsToDelete = duplicates
-      .map(d => d._id)
-      .filter((id): id is NonNullable<typeof id> => id != null)
-      .map(id => new ObjectId(id.toString()));
+    // Find the doc with the highest record_count in JS memory
+    const best = docs.reduce((a, b) =>
+      (a.record_count ?? 0) >= (b.record_count ?? 0) ? a : b,
+    );
+
+    const idsToDelete = docs
+      .filter(d => !new ObjectId(d._id!.toString()).equals(new ObjectId(best._id!.toString())))
+      .map(d => new ObjectId(d._id!.toString()));
 
     if (idsToDelete.length > 0) {
       const result = await col.deleteMany({ firm_id: firmId, _id: { $in: idsToDelete } });
-      console.log(`[cleanup] ${entityType}: deleted ${result.deletedCount} duplicate(s), kept 1`);
+      console.log(`[cleanup] ${entityType}: deleted ${result.deletedCount} duplicate(s), kept 1 (record_count=${best.record_count ?? 0})`);
     }
   }
 }
