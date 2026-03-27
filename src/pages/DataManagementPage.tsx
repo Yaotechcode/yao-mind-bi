@@ -818,7 +818,26 @@ export default function DataManagementPage() {
         />
       </DashboardSection>
 
-      {/* Data quality report */}
+      {/* Run Calculations */}
+      <div className="flex items-center gap-3">
+        <Button onClick={handleRunCalculations} disabled={isCalculating}>
+          {isCalculating ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+              Calculating…
+            </>
+          ) : (
+            <>
+              <Play className="h-4 w-4 mr-1.5" />
+              Run Calculations
+            </>
+          )}
+        </Button>
+        {isCalculating && (
+          <span className="text-xs text-muted-foreground">Processing — this may take a moment…</span>
+        )}
+      </div>
+
       <DataQualityReport issues={qualityIssues} />
 
       {/* Fee earner review */}
