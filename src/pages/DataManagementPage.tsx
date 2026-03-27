@@ -465,10 +465,13 @@ export default function DataManagementPage() {
   const [stagedFiles, setStagedFiles] = useState<DetectedFile[]>([]);
   const [uploadProgress, setUploadProgress] = useState(0);
 
-  // Upload status from API
+  // Upload status from API — never clear while refreshing
   const [loadedDatasets, setLoadedDatasets] = useState<LoadedDataset[]>([]);
+  const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
+  const hasFetchedRef = useRef(false);
 
   const refreshUploadStatus = useCallback(async () => {
+    setIsRefreshingStatus(true);
     try {
       const entries = await fetchUploadStatus();
       const datasets: LoadedDataset[] = entries
@@ -481,7 +484,9 @@ export default function DataManagementPage() {
         }));
       setLoadedDatasets(datasets);
     } catch {
-      // Silently fail — table just stays empty
+      // Silently fail — keep showing last known good state
+    } finally {
+      setIsRefreshingStatus(false);
     }
   }, []);
 
@@ -501,10 +506,12 @@ export default function DataManagementPage() {
     });
   }, []);
 
-  // Fetch on mount
+  // Fetch on mount only — guard against StrictMode double-invoke
   useEffect(() => {
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
     refreshUploadStatus();
-  }, [refreshUploadStatus]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [qualityIssues] = useState<QualityIssue[]>([]);
   const [feeEarners] = useState<FeeEarnerRow[]>([]);
   const [mappingTemplates] = useState<MappingTemplateRow[]>([]);
