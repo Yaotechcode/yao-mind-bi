@@ -508,7 +508,10 @@ export default function DataManagementPage() {
   const [feeEarners] = useState<FeeEarnerRow[]>([]);
   const [mappingTemplates] = useState<MappingTemplateRow[]>([]);
   const [lastExported] = useState<string | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+
+  // Run Calculations state
+  const [isCalculating, setIsCalculating] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Detect file type from name/extension
   const detectFileType = useCallback((file: File): DetectedFile => {
