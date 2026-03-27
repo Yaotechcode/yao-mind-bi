@@ -23,7 +23,7 @@ export function useCalculationStatus() {
   });
 
   const mutation = useMutation<CalculationResult, Error>({
-    mutationFn: triggerCalculation,
+    mutationFn: () => triggerCalculation(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: CALC_STATUS_KEY });
       // Also invalidate all dashboard data so they refetch with fresh calculations

@@ -208,8 +208,11 @@ export function fetchCalculationStatus(): Promise<CalculationStatus> {
   return apiFetch<CalculationStatus>('/calculate/status');
 }
 
-export function triggerCalculation(): Promise<CalculationResult> {
-  return apiFetch<CalculationResult>('/calculate', { method: 'POST' });
+export function triggerCalculation(force = false): Promise<CalculationResult> {
+  return apiFetch<CalculationResult>('/calculate', {
+    method: 'POST',
+    body: JSON.stringify({ force }),
+  });
 }
 
 const CHUNK_SIZE = 5000;

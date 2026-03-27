@@ -2,12 +2,12 @@
  * DataManagementPage — Upload, review, and manage firm data.
  */
 
-import { useState, useCallback, useRef, useMemo, useEffect, Fragment } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect, Fragment, type FC } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Upload, FileJson, FileSpreadsheet, FileText, CheckCircle2, XCircle,
   Clock, Trash2, RefreshCw, ChevronDown, ChevronRight, Sparkles, Save,
-  AlertTriangle, Info, Download, UploadCloud, Bot,
+  AlertTriangle, Info, Download, UploadCloud, Bot, Play, Loader2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -18,7 +18,8 @@ import { AlertCard } from '@/components/common/AlertCard';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ProgressBar } from '@/components/common/ProgressBar';
 import { useUpload } from '@/hooks/useUpload';
-import { fetchConfig, updateConfig, fetchUploadStatus, type UploadStatusEntry } from '@/lib/api-client';
+import { fetchConfig, updateConfig, fetchUploadStatus, triggerCalculation, type UploadStatusEntry } from '@/lib/api-client';
+import { supabase } from '@/integrations/supabase/client';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -508,6 +509,10 @@ export default function DataManagementPage() {
   const [feeEarners] = useState<FeeEarnerRow[]>([]);
   const [mappingTemplates] = useState<MappingTemplateRow[]>([]);
   const [lastExported] = useState<string | null>(null);
+
+  // Run Calculations state
+  const [isCalculating, setIsCalculating] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   // Detect file type from name/extension
@@ -609,6 +614,54 @@ export default function DataManagementPage() {
       }
     };
     input.click();
+  }, []);
+
+  // Run Calculations
+  const handleRunCalculations = useCallback(async () => {
+    setIsCalculating(true);
+    const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/.netlify/functions';
+    const getToken = async () => {
+      const { data } = await supabase.auth.getSession();
+      return data.session?.access_token ?? null;
+    };
+    try {
+      await triggerCalculation(true);
+      pollRef.current = setInterval(async () => {
+        try {
+          const token = await getToken();
+          const headers: Record<string, string> = {};
+          if (token) headers['Authorization'] = `Bearer ${token}`;
+          const res = await fetch(`${API_BASE}/calculate/status`, { headers });
+          const body = await res.json() as { status: string; error?: string | null };
+          if (body.status === 'current') {
+            clearInterval(pollRef.current!);
+            pollRef.current = null;
+            setIsCalculating(false);
+            toast.success('Calculations complete');
+          } else if (body.status === 'error') {
+            clearInterval(pollRef.current!);
+            pollRef.current = null;
+            setIsCalculating(false);
+            toast.error(body.error ?? 'Calculation failed');
+          }
+        } catch {
+          clearInterval(pollRef.current!);
+          pollRef.current = null;
+          setIsCalculating(false);
+          toast.error('Failed to check calculation status');
+        }
+      }, 3000);
+    } catch {
+      setIsCalculating(false);
+      toast.error('Failed to trigger calculations');
+    }
+  }, []);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
   }, []);
 
   const handleDeleteDataset = useCallback(
@@ -765,7 +818,26 @@ export default function DataManagementPage() {
         />
       </DashboardSection>
 
-      {/* Data quality report */}
+      {/* Run Calculations */}
+      <div className="flex items-center gap-3">
+        <Button onClick={handleRunCalculations} disabled={isCalculating}>
+          {isCalculating ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+              Calculating…
+            </>
+          ) : (
+            <>
+              <Play className="h-4 w-4 mr-1.5" />
+              Run Calculations
+            </>
+          )}
+        </Button>
+        {isCalculating && (
+          <span className="text-xs text-muted-foreground">Processing — this may take a moment…</span>
+        )}
+      </div>
+
       <DataQualityReport issues={qualityIssues} />
 
       {/* Fee earner review */}
