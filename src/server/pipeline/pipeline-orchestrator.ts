@@ -41,7 +41,7 @@ import type {
   JoinResult,
 } from '@shared/types/pipeline.js';
 import type { DataQualityReport, KnownGap, EntityType, ColumnMapping } from '@shared/types/index.js';
-import type { MappingSet as ClientMappingSet } from '../../shared/mapping/types.js';
+import type { MappingSet as ClientMappingSet, ColumnMapping as MappingColumnMapping } from '../../shared/mapping/types.js';
 import type { ParseResult } from '../../client/parsers/types.js';
 import type { PipelineRunResult, PipelineWarning } from './pipeline-types.js';
 
@@ -319,6 +319,56 @@ export function normaliseUpload(params: {
   }
 
   return { normaliseResult, entityKey, aborted: false, warnings };
+}
+
+// ---------------------------------------------------------------------------
+// normaliseFromRaw — convenience wrapper used by the background function
+// Builds identity parse/mapping inputs from already-stored raw records and
+// delegates to normaliseUpload. No DB calls — pure CPU work.
+// ---------------------------------------------------------------------------
+
+export function normaliseFromRaw(params: {
+  fileType: string;
+  rawRecords: Record<string, unknown>[];
+}): NormaliseUploadResult {
+  const { fileType, rawRecords } = params;
+
+  const entityKey = FILE_TYPE_TO_ENTITY_KEY[fileType];
+  if (!entityKey) throw new Error(`Unknown fileType: ${fileType}`);
+
+  const entityTypeEnum = ENTITY_KEY_TO_ENUM[entityKey];
+  const columns = rawRecords.length > 0 ? Object.keys(rawRecords[0]) : [];
+
+  const mappings: MappingColumnMapping[] = columns.map((col) => ({
+    rawColumn: col,
+    mappedTo: col,
+    entityKey: entityTypeEnum as EntityType,
+    isRequired: false,
+    confidence: 'auto' as const,
+  }));
+
+  const mappingSet: ClientMappingSet = {
+    fileType,
+    entityKey: entityTypeEnum as EntityType,
+    mappings,
+    missingRequiredFields: [],
+    unmappedColumns: [],
+    customFieldSuggestions: [],
+    isComplete: true,
+  };
+
+  const parseResult: ParseResult = {
+    fileType,
+    originalFilename: '',
+    rowCount: rawRecords.length,
+    columns: [],
+    previewRows: rawRecords.slice(0, 10),
+    fullRows: rawRecords,
+    parseErrors: [],
+    parsedAt: new Date().toISOString(),
+  };
+
+  return normaliseUpload({ fileType, parseResult, mappingSet });
 }
 
 // ---------------------------------------------------------------------------

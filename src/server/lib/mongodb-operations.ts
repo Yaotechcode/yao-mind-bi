@@ -54,6 +54,18 @@ export async function storeRawUpload(
 }
 
 /**
+ * Fetch the raw_content array from a raw_uploads document.
+ * Returns null if the document is not found or belongs to a different firm.
+ */
+export async function getRawUpload(
+  firmId: string,
+  uploadId: string,
+): Promise<Record<string, unknown>[] | null> {
+  const doc = await getUploadById(firmId, uploadId);
+  return doc?.raw_content ?? null;
+}
+
+/**
  * Retrieve recent uploads for a firm, newest first.
  * Default limit is 20.
  */

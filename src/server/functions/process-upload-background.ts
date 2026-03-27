@@ -2,10 +2,16 @@
  * process-upload-background.ts — Netlify Background Function
  * POST /.netlify/functions/process-upload-background
  *
- * Triggered by upload.ts after Phase 1 (normalise + store) completes.
- * Runs Stages 3–7 (Cross-Reference → Index → Join → Enrich → Aggregate)
- * on the already-stored normalised dataset, then persists enriched entities
- * and KPIs and marks the upload as 'processed'.
+ * Triggered by upload.ts after the raw file is stored.
+ * Runs ALL pipeline stages (2–7):
+ *   Stage 2: Normalise  — from raw_uploads record
+ *   Stage 3: Cross-Reference
+ *   Stage 4: Index
+ *   Stage 5: Join
+ *   Stage 6: Enrich
+ *   Stage 7: Aggregate
+ * Persists normalised dataset, enriched entities, and KPIs, then marks
+ * the upload as 'processed'.
  *
  * Background functions have up to 15 minutes to complete. The HTTP response
  * is not read by the caller — it fires and forgets.
@@ -14,8 +20,8 @@
  */
 
 import type { Handler } from '@netlify/functions';
-import { runPipelineFromStored } from '../pipeline/pipeline-orchestrator.js';
-import { updateUploadStatus } from '../lib/mongodb-operations.js';
+import { normaliseFromRaw, runPipelineFromStored } from '../pipeline/pipeline-orchestrator.js';
+import { getRawUpload, storeNormalisedDataset, updateUploadStatus } from '../lib/mongodb-operations.js';
 
 export const handler: Handler = async (event) => {
   if (event.httpMethod !== 'POST') {
@@ -50,6 +56,33 @@ export const handler: Handler = async (event) => {
   }
 
   try {
+    // ── Stage 2: Normalise ────────────────────────────────────────────────────
+    // Fetch raw records stored by upload.ts, then normalise in-process.
+    const rawRecords = await getRawUpload(firmId, uploadId);
+    if (!rawRecords) {
+      await updateUploadStatus(firmId, uploadId, 'error', `Raw upload not found: ${uploadId}`);
+      return { statusCode: 404, body: JSON.stringify({ error: 'Raw upload not found', uploadId }) };
+    }
+
+    const normaliseResult = normaliseFromRaw({ fileType, rawRecords });
+
+    if (normaliseResult.aborted) {
+      await updateUploadStatus(firmId, uploadId, 'error', normaliseResult.abortReason);
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ success: false, aborted: true, reason: normaliseResult.abortReason, uploadId }),
+      };
+    }
+
+    await storeNormalisedDataset(
+      firmId,
+      fileType,
+      normaliseResult.entityKey,
+      normaliseResult.normaliseResult.records,
+      uploadId,
+    );
+
+    // ── Stages 3–7 + persist ──────────────────────────────────────────────────
     const result = await runPipelineFromStored({ firmId, uploadId, fileType });
 
     console.log(

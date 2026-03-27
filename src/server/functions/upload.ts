@@ -15,8 +15,8 @@ import { Readable } from 'stream';
 import busboy from 'busboy';
 import Papa from 'papaparse';
 import { authenticateRequest, AuthError } from '../lib/auth-middleware.js';
-import { storeRawUpload, updateUploadStatus, storeNormalisedDataset } from '../lib/mongodb-operations.js';
-import { normaliseUpload, runFullPipeline } from '../pipeline/pipeline-orchestrator.js';
+import { storeRawUpload, updateUploadStatus } from '../lib/mongodb-operations.js';
+import { runFullPipeline } from '../pipeline/pipeline-orchestrator.js';
 import { EntityType } from '../../shared/types/index.js';
 import type { MappingSet, ColumnMapping } from '../../shared/mapping/types.js';
 import type { ParseResult, ColumnInfo } from '../../client/parsers/types.js';
@@ -454,36 +454,10 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    // ── Phase 1: Normalise (Stage 2) synchronously ────────────────────────────
-    const normaliseResult = normaliseUpload({ fileType, parseResult, mappingSet });
-
-    if (normaliseResult.aborted) {
-      await updateUploadStatus(firmId, uploadId, 'error');
-      return {
-        statusCode: 422,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          success: false,
-          uploadId,
-          message: `Upload aborted — ${normaliseResult.abortReason}`,
-          warnings: normaliseResult.warnings,
-        }),
-      };
-    }
-
-    // Store normalised records so the background function can load them
-    await storeNormalisedDataset(
-      firmId,
-      fileType,
-      normaliseResult.entityKey,
-      normaliseResult.normaliseResult.records,
-      uploadId,
-    );
-
     // Mark as processing before firing background task
     await updateUploadStatus(firmId, uploadId, 'processing');
 
-    // ── Phase 2: fire-and-forget background function (Stages 3–7) ─────────────
+    // ── Fire-and-forget background function (Stages 2–7) ──────────────────────
     // Do NOT await — background functions run for up to 15 minutes independently.
     const siteUrl = process.env['URL'] ?? 'http://localhost:8888';
     const bgUrl = `${siteUrl}/.netlify/functions/process-upload-background`;
@@ -508,9 +482,8 @@ export const handler: Handler = async (event) => {
         success: true,
         uploadId,
         status: 'processing',
-        message: `${fileType} received — ${normaliseResult.normaliseResult.records.length} records normalised, pipeline running in background`,
-        recordCount: normaliseResult.normaliseResult.records.length,
-        warnings: normaliseResult.warnings,
+        message: `${fileType} received — ${parseResult.fullRows.length} records queued, pipeline running in background`,
+        recordCount: parseResult.fullRows.length,
       }),
     };
 
