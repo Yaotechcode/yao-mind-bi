@@ -4,6 +4,7 @@
  */
 
 import { supabase } from '@/integrations/supabase/client';
+import { parseFile } from '@/client/parsers';
 import type {
   FirmOverviewPayload,
   FeeEarnerPerformancePayload,
@@ -61,12 +62,11 @@ export interface CalculationResult {
 }
 
 export interface UploadResult {
+  success: boolean;
   uploadId: string;
-  entityType: string;
+  status: 'processing';
   recordCount: number;
-  validCount: number;
-  invalidCount: number;
-  status: 'complete' | 'partial' | 'failed';
+  message?: string;
 }
 
 export type DashboardFilters = Record<string, string | string[] | number | boolean | undefined>;
@@ -212,43 +212,90 @@ export function triggerCalculation(): Promise<CalculationResult> {
   return apiFetch<CalculationResult>('/calculate', { method: 'POST' });
 }
 
+const CHUNK_SIZE = 5000;
+
 export async function uploadFile(
   file: File,
   fileType: string,
-  mappingSet?: string,
 ): Promise<UploadResult> {
-  const token = await getAuthToken();
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('fileType', fileType);
-  if (mappingSet) formData.append('mappingSet', mappingSet);
-
-  const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-
-  const url = `${API_BASE}/upload`;
-  let response: Response;
-  try {
-    response = await fetch(url, { method: 'POST', headers, body: formData });
-  } catch (err) {
-    throw new ApiError('Upload failed — network error', 0, err);
-  }
-
-  if (response.status === 401) {
-    window.location.href = '/auth';
-    throw new ApiError('Session expired', 401);
-  }
-
-  if (!response.ok) {
-    const body = await response.json().catch(() => null);
+  // Parse file client-side using existing parsers
+  const parseResult = await parseFile(file);
+  if (parseResult.parseErrors.some(e => e.severity === 'error')) {
     throw new ApiError(
-      (body as { error?: string })?.error ?? `Upload failed (${response.status})`,
-      response.status,
-      body,
+      parseResult.parseErrors.find(e => e.severity === 'error')?.message ?? 'File parse failed',
+      400,
     );
   }
 
-  return response.json() as Promise<UploadResult>;
+  const rows = parseResult.fullRows;
+  const token = await getAuthToken();
+
+  const postChunk = async <T>(body: unknown): Promise<T> => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const url = `${API_BASE}/upload`;
+    let response: Response;
+    try {
+      response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    } catch (err) {
+      throw new ApiError('Upload failed — network error', 0, err);
+    }
+    if (response.status === 401) {
+      window.location.href = '/auth';
+      throw new ApiError('Session expired', 401);
+    }
+    if (!response.ok) {
+      const resBody = await response.json().catch(() => null);
+      throw new ApiError(
+        (resBody as { error?: string })?.error ?? `Upload failed (${response.status})`,
+        response.status,
+        resBody,
+      );
+    }
+    return response.json() as Promise<T>;
+  };
+
+  // Non-chunked: single POST for files with <= CHUNK_SIZE records
+  if (rows.length <= CHUNK_SIZE) {
+    return postChunk<UploadResult>({
+      fileType,
+      originalFilename: file.name,
+      records: rows,
+    });
+  }
+
+  // Chunked: split into CHUNK_SIZE-record slices, upload sequentially
+  const chunks: Record<string, unknown>[][] = [];
+  for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+    chunks.push(rows.slice(i, i + CHUNK_SIZE));
+  }
+  const totalChunks = chunks.length;
+
+  // Chunk 0 — creates the upload document, returns uploadId
+  const { uploadId } = await postChunk<{ uploadId: string }>({
+    fileType,
+    originalFilename: file.name,
+    isChunked: true,
+    chunkIndex: 0,
+    totalChunks,
+    records: chunks[0],
+  });
+
+  // Chunks 1 … totalChunks-1
+  for (let i = 1; i < totalChunks; i++) {
+    const result = await postChunk<UploadResult>({
+      uploadId,
+      fileType,
+      chunkIndex: i,
+      records: chunks[i],
+    });
+    if (i === totalChunks - 1) {
+      return result;
+    }
+  }
+
+  // Unreachable when totalChunks >= 2, but satisfies TypeScript
+  throw new ApiError('Chunked upload completed without a final response', 500);
 }
 
 export interface UploadStatusEntry {

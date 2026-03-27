@@ -15,7 +15,7 @@ import { Readable } from 'stream';
 import busboy from 'busboy';
 import Papa from 'papaparse';
 import { authenticateRequest, AuthError } from '../lib/auth-middleware.js';
-import { storeRawUpload, updateUploadStatus } from '../lib/mongodb-operations.js';
+import { storeRawUpload, storeRawUploadChunk, updateUploadStatus } from '../lib/mongodb-operations.js';
 import { runFullPipeline } from '../pipeline/pipeline-orchestrator.js';
 import { EntityType } from '../../shared/types/index.js';
 import type { MappingSet, ColumnMapping } from '../../shared/mapping/types.js';
@@ -319,6 +319,23 @@ function buildParseResult(
 }
 
 // ---------------------------------------------------------------------------
+// Background trigger helper
+// ---------------------------------------------------------------------------
+
+function fireBackground(uploadId: string, firmId: string, fileType: string): void {
+  const siteUrl = process.env['URL'] ?? 'http://localhost:8888';
+  const bgUrl = `${siteUrl}/.netlify/functions/process-upload-background`;
+  const internalSecret = process.env['INTERNAL_API_SECRET'] ?? '';
+  void fetch(bgUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-internal-secret': internalSecret },
+    body: JSON.stringify({ uploadId, firmId, fileType }),
+  }).catch((err: unknown) => {
+    console.error('[upload] failed to trigger background function', err);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
 
@@ -377,13 +394,79 @@ export const handler: Handler = async (event) => {
 
     } else {
       // ------------------------------------------------------------------
-      // JSON body path (existing behaviour)
+      // JSON body path
       // ------------------------------------------------------------------
+      let parsed: Record<string, unknown>;
       try {
-        body = JSON.parse(event.body) as UploadRequestBody;
+        parsed = JSON.parse(event.body) as Record<string, unknown>;
       } catch {
         return { statusCode: 400, body: JSON.stringify({ error: 'Invalid JSON body' }) };
       }
+
+      // ── Pre-parsed records path (client-side chunked upload) ────────────────
+      // Body shape: { fileType, originalFilename?, records: [...], isChunked?, chunkIndex?, totalChunks?, uploadId? }
+      if (Array.isArray(parsed['records'])) {
+        const rawRecords = parsed['records'] as Record<string, unknown>[];
+        const ft = normalizeFileType(typeof parsed['fileType'] === 'string' ? parsed['fileType'] : '');
+        const isChunked   = parsed['isChunked']   === true;
+        const chunkIndex  = typeof parsed['chunkIndex']  === 'number' ? parsed['chunkIndex']  : 0;
+        const totalChunks = typeof parsed['totalChunks'] === 'number' ? parsed['totalChunks'] : 1;
+        const existingUploadId = typeof parsed['uploadId'] === 'string' ? parsed['uploadId'] : null;
+        const originalFilename = typeof parsed['originalFilename'] === 'string'
+          ? parsed['originalFilename']
+          : `upload.${ft === 'feeEarner' ? 'csv' : 'json'}`;
+
+        if (!ft || !VALID_FILE_TYPES.has(ft)) {
+          return { statusCode: 400, body: JSON.stringify({ error: `Unknown fileType "${ft}". Valid values: ${[...VALID_FILE_TYPES].join(', ')}` }) };
+        }
+
+        // Normalise record keys server-side (same as multipart path)
+        const records = normaliseRecordKeys(rawRecords, ft);
+
+        // ── Chunked: first chunk — create upload document, return uploadId ──
+        if (isChunked && chunkIndex === 0) {
+          const uploadId = await storeRawUpload(firmId, ft, originalFilename, records, userId, totalChunks);
+          await updateUploadStatus(firmId, uploadId, 'processing');
+          return {
+            statusCode: 200,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ success: true, uploadId, chunkIndex: 0, totalChunks }),
+          };
+        }
+
+        // ── Chunked: subsequent chunk — append, fire background on final ────
+        if (chunkIndex > 0 && existingUploadId) {
+          const { chunksReceived, totalChunks: tc } = await storeRawUploadChunk(
+            firmId, existingUploadId, chunkIndex, ft, records,
+          );
+          if (chunksReceived >= tc) {
+            fireBackground(existingUploadId, firmId, ft);
+            return {
+              statusCode: 200,
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ success: true, uploadId: existingUploadId, status: 'processing', recordCount: tc * records.length }),
+            };
+          }
+          return {
+            statusCode: 200,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ success: true, uploadId: existingUploadId, chunkIndex }),
+          };
+        }
+
+        // ── Non-chunked: single records POST — store and fire immediately ───
+        const uploadId = await storeRawUpload(firmId, ft, originalFilename, records, userId);
+        await updateUploadStatus(firmId, uploadId, 'processing');
+        fireBackground(uploadId, firmId, ft);
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ success: true, uploadId, status: 'processing', recordCount: records.length }),
+        };
+      }
+
+      // ── Legacy parseResult/mappingSet body (reprocess, dry-run, internal callers) ──
+      body = parsed as unknown as UploadRequestBody;
     }
 
     const { fileType, originalFilename, parseResult, mappingSet, runFullPipeline: shouldRunPipeline = true } = body;
@@ -456,24 +539,7 @@ export const handler: Handler = async (event) => {
 
     // Mark as processing before firing background task
     await updateUploadStatus(firmId, uploadId, 'processing');
-
-    // ── Fire-and-forget background function (Stages 2–7) ──────────────────────
-    // Do NOT await — background functions run for up to 15 minutes independently.
-    const siteUrl = process.env['URL'] ?? 'http://localhost:8888';
-    const bgUrl = `${siteUrl}/.netlify/functions/process-upload-background`;
-    const internalSecret = process.env['INTERNAL_API_SECRET'] ?? '';
-
-    void fetch(bgUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-internal-secret': internalSecret,
-      },
-      body: JSON.stringify({ uploadId, firmId, fileType }),
-    }).catch((err: unknown) => {
-      // Log but do not surface — background function may still succeed
-      console.error('[upload] failed to trigger background function', err);
-    });
+    fireBackground(uploadId, firmId, fileType);
 
     return {
       statusCode: 200,

@@ -1,6 +1,7 @@
 import { getCollection } from './mongodb.js';
 import type {
   RawUploadDocument,
+  RawUploadChunkDocument,
   EnrichedEntitiesDocument,
   CalculatedKpisDocument,
   HistoricalSnapshotDocument,
@@ -36,7 +37,8 @@ export async function storeRawUpload(
   fileType: string,
   filename: string,
   content: Record<string, unknown>[],
-  uploadedBy: string
+  uploadedBy: string,
+  totalChunks?: number,
 ): Promise<string> {
   const col = await getCollection<RawUploadDocument>('raw_uploads');
   const doc: RawUploadDocument = {
@@ -48,21 +50,78 @@ export async function storeRawUpload(
     raw_content: content,
     record_count: content.length,
     status: 'pending',
+    ...(totalChunks != null && { total_chunks: totalChunks, chunks_received: 1 }),
   };
   const result = await col.insertOne(doc as Parameters<typeof col.insertOne>[0]);
   return result.insertedId.toString();
 }
 
 /**
- * Fetch the raw_content array from a raw_uploads document.
- * Returns null if the document is not found or belongs to a different firm.
+ * Append a chunk (chunk_index >= 1) to an existing chunked upload.
+ * Stores the chunk's records in raw_upload_chunks and increments
+ * chunks_received on the primary raw_uploads document.
+ * Returns the updated chunks_received and total_chunks counts so
+ * the caller can decide whether to trigger background processing.
+ */
+export async function storeRawUploadChunk(
+  firmId: string,
+  uploadId: string,
+  chunkIndex: number,
+  fileType: string,
+  records: Record<string, unknown>[],
+): Promise<{ chunksReceived: number; totalChunks: number }> {
+  const { ObjectId } = await import('mongodb');
+
+  // Insert the chunk records
+  const chunkCol = await getCollection<RawUploadChunkDocument>('raw_upload_chunks');
+  await chunkCol.insertOne({
+    upload_id: uploadId,
+    firm_id: firmId,
+    chunk_index: chunkIndex,
+    file_type: fileType,
+    records,
+  } as Parameters<typeof chunkCol.insertOne>[0]);
+
+  // Increment chunks_received on the primary document and return updated counts
+  const primaryCol = await getCollection<RawUploadDocument>('raw_uploads');
+  const updated = await primaryCol.findOneAndUpdate(
+    { _id: new ObjectId(uploadId), firm_id: firmId },
+    { $inc: { chunks_received: 1, record_count: records.length } } as never,
+    { returnDocument: 'after' },
+  );
+  if (!updated) throw new Error(`Raw upload document not found: ${uploadId}`);
+  return {
+    chunksReceived: updated.chunks_received ?? 0,
+    totalChunks: updated.total_chunks ?? 1,
+  };
+}
+
+/**
+ * Fetch the full raw records for an upload, reassembling multiple chunks if needed.
+ * Chunk 0 records live in raw_uploads.raw_content; chunks 1+ live in raw_upload_chunks.
+ * Returns null if the primary document is not found or belongs to a different firm.
  */
 export async function getRawUpload(
   firmId: string,
   uploadId: string,
 ): Promise<Record<string, unknown>[] | null> {
-  const doc = await getUploadById(firmId, uploadId);
-  return doc?.raw_content ?? null;
+  const primary = await getUploadById(firmId, uploadId);
+  if (!primary) return null;
+
+  const content: Record<string, unknown>[] = [...primary.raw_content];
+
+  if ((primary.total_chunks ?? 1) > 1) {
+    const chunkCol = await getCollection<RawUploadChunkDocument>('raw_upload_chunks');
+    const chunks = await chunkCol
+      .find({ firm_id: firmId, upload_id: uploadId })
+      .sort({ chunk_index: 1 })
+      .toArray();
+    for (const chunk of chunks) {
+      content.push(...chunk.records);
+    }
+  }
+
+  return content;
 }
 
 /**

@@ -15,11 +15,11 @@ export function useUpload() {
   const [error, setError] = useState<Error | null>(null);
 
   const uploadFile = useCallback(
-    async (file: File, fileType: string, mappingSet?: string): Promise<UploadResult> => {
+    async (file: File, fileType: string): Promise<UploadResult> => {
       setUploadStatus('uploading');
       setError(null);
       try {
-        const result = await apiUploadFile(file, fileType, mappingSet);
+        const result = await apiUploadFile(file, fileType);
         setLastUpload(result);
         setUploadStatus('complete');
         // Invalidate calculation status and dashboards after upload

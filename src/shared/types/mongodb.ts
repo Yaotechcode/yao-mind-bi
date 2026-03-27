@@ -24,6 +24,10 @@ export interface RawUploadDocument {
   error_message?: string;
   processing_started_at?: Date;
   processing_completed_at?: Date;
+  /** Set when the upload arrives in multiple chunks. Equals the total number of chunks expected. */
+  total_chunks?: number;
+  /** Incremented each time a chunk is received. Processing fires when chunks_received === total_chunks. */
+  chunks_received?: number;
 }
 
 // enriched_entities — one document per (firm, entity_type, data_version)
@@ -111,6 +115,16 @@ export interface RecalculationFlagDocument {
   last_error?: string;
   /** Timestamp of the last calculation error. */
   last_error_at?: Date;
+}
+
+// raw_upload_chunks — overflow chunks for large multi-part uploads (chunk_index >= 1)
+// Chunk 0 records live in raw_uploads.raw_content; chunks 1+ live here.
+export interface RawUploadChunkDocument {
+  upload_id: string;
+  firm_id: string;
+  chunk_index: number;
+  file_type: string;
+  records: Record<string, unknown>[];
 }
 
 // cross_reference_registries — one document per firm, upserted on every pipeline run
