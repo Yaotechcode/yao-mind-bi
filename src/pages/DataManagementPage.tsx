@@ -619,24 +619,30 @@ export default function DataManagementPage() {
   // Run Calculations
   const handleRunCalculations = useCallback(async () => {
     setIsCalculating(true);
+    const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/.netlify/functions';
+    const getToken = async () => {
+      const { data } = await supabase.auth.getSession();
+      return data.session?.access_token ?? null;
+    };
     try {
       await triggerCalculation(true);
-      // Poll status every 3 seconds
       pollRef.current = setInterval(async () => {
         try {
-          const status = await fetchCalculationStatus();
-          if (status.isStale === false && !status.inProgress) {
-            // current
+          const token = await getToken();
+          const headers: Record<string, string> = {};
+          if (token) headers['Authorization'] = `Bearer ${token}`;
+          const res = await fetch(`${API_BASE}/calculate/status`, { headers });
+          const body = await res.json() as { status: string; error?: string | null };
+          if (body.status === 'current') {
             clearInterval(pollRef.current!);
             pollRef.current = null;
             setIsCalculating(false);
             toast.success('Calculations complete');
-          }
-          if ((status as Record<string, unknown>).status === 'error' || ((status as Record<string, unknown>).error)) {
+          } else if (body.status === 'error') {
             clearInterval(pollRef.current!);
             pollRef.current = null;
             setIsCalculating(false);
-            toast.error((status as Record<string, unknown>).error as string ?? 'Calculation failed');
+            toast.error(body.error ?? 'Calculation failed');
           }
         } catch {
           clearInterval(pollRef.current!);
