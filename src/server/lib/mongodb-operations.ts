@@ -162,8 +162,9 @@ export async function getLatestEnrichedEntities(
 }
 
 /**
- * Insert a new enriched-entity snapshot.
- * data_version is an ISO timestamp string — unique per firm + entity_type.
+ * Upsert the enriched-entity snapshot for a firm + entity type.
+ * Uses replaceOne with upsert so only one document per (firm_id, entity_type)
+ * ever exists — prevents unbounded accumulation of duplicate snapshots.
  */
 export async function storeEnrichedEntities(
   firmId: string,
@@ -183,7 +184,47 @@ export async function storeEnrichedEntities(
     data_quality: dataQuality,
     created_at: new Date(),
   };
-  await col.insertOne(doc as Parameters<typeof col.insertOne>[0]);
+  await col.replaceOne(
+    { firm_id: firmId, entity_type: entityType },
+    doc as Parameters<typeof col.replaceOne>[1],
+    { upsert: true },
+  );
+}
+
+/**
+ * One-time cleanup: for each entity type, keep only the document with the
+ * highest record_count and delete all others. Call this once to fix
+ * collections that accumulated duplicates before replaceOne was in place.
+ */
+export async function cleanupDuplicateEnrichedEntities(firmId: string): Promise<void> {
+  const col = await getCollection<EnrichedEntitiesDocument>('enriched_entities');
+  const { ObjectId } = await import('mongodb');
+
+  const entityTypes = [
+    'feeEarner', 'matter', 'timeEntry', 'invoice',
+    'client', 'disbursement', 'department', 'task',
+  ];
+
+  for (const entityType of entityTypes) {
+    // Sort by record_count DESC, data_version DESC as tiebreak — keep the first
+    const docs = await col
+      .find({ firm_id: firmId, entity_type: entityType })
+      .sort({ record_count: -1, data_version: -1 })
+      .toArray();
+
+    if (docs.length <= 1) continue;
+
+    const [, ...duplicates] = docs;
+    const idsToDelete = duplicates
+      .map(d => d._id)
+      .filter((id): id is NonNullable<typeof id> => id != null)
+      .map(id => new ObjectId(id.toString()));
+
+    if (idsToDelete.length > 0) {
+      const result = await col.deleteMany({ firm_id: firmId, _id: { $in: idsToDelete } });
+      console.log(`[cleanup] ${entityType}: deleted ${result.deletedCount} duplicate(s), kept 1`);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -395,8 +436,12 @@ export async function storeNormalisedDataset(
 ): Promise<void> {
   const col = await getCollection<NormalisedDatasetDocument>('normalised_datasets');
 
-  // Delete existing chunks for this firm + fileType before writing new ones
-  await col.deleteMany({ firm_id: firmId, file_type: fileType });
+  // Delete ALL existing chunks for this firm + fileType before writing fresh ones.
+  // This is the correct replace-all pattern — do not move this after any insert.
+  const { deletedCount } = await col.deleteMany({ firm_id: firmId, file_type: fileType });
+  if (deletedCount > 0) {
+    console.log(`[storeNormalisedDataset] deleted ${deletedCount} stale chunk(s) for ${fileType}`);
+  }
 
   const totalChunks = Math.max(1, Math.ceil(records.length / CHUNK_SIZE));
   const now = new Date();
