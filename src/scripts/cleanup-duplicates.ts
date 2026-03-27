@@ -23,7 +23,10 @@ if (!process.env['MONGODB_URI']) {
   throw new Error('MONGODB_URI not loaded — check .env.local exists');
 }
 
-import { cleanupDuplicateEnrichedEntities } from '../server/lib/mongodb-operations.js';
+import {
+  cleanupDuplicateEnrichedEntities,
+  cleanupDuplicateCalculatedKpis,
+} from '../server/lib/mongodb-operations.js';
 
 async function main(): Promise<void> {
   const firmId = process.env['FIRM_ID'];
@@ -31,9 +34,15 @@ async function main(): Promise<void> {
     throw new Error('FIRM_ID env var is required — set it to your firm\'s MongoDB firm_id');
   }
 
-  console.log(`Cleaning up duplicate enriched_entities for firm: ${firmId}`);
+  console.log(`Cleaning up duplicates for firm: ${firmId}`);
+
+  console.log('\n--- enriched_entities ---');
   await cleanupDuplicateEnrichedEntities(firmId);
-  console.log('Done.');
+
+  console.log('\n--- calculated_kpis ---');
+  await cleanupDuplicateCalculatedKpis(firmId);
+
+  console.log('\nDone.');
   process.exit(0);
 }
 

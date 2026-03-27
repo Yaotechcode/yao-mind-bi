@@ -253,7 +253,9 @@ export async function getLatestCalculatedKpis(
 }
 
 /**
- * Persist a new calculated-KPIs snapshot.
+ * Upsert the calculated-KPIs snapshot for a firm.
+ * Uses replaceOne with upsert so only one document per firm_id ever exists —
+ * prevents unbounded accumulation of KPI snapshots on every calculation run.
  */
 export async function storeCalculatedKpis(
   firmId: string,
@@ -269,7 +271,44 @@ export async function storeCalculatedKpis(
     data_version: dataVersion,
     kpis,
   };
-  await col.insertOne(doc as Parameters<typeof col.insertOne>[0]);
+  await col.replaceOne(
+    { firm_id: firmId },
+    doc as Parameters<typeof col.replaceOne>[1],
+    { upsert: true },
+  );
+}
+
+/**
+ * One-time cleanup: keep only the most recent calculated_kpis document for a
+ * firm (by calculated_at) and delete all others. Projects only _id and
+ * calculated_at to avoid loading the full KPI payload into memory.
+ */
+export async function cleanupDuplicateCalculatedKpis(firmId: string): Promise<void> {
+  const col = await getCollection<CalculatedKpisDocument>('calculated_kpis');
+  const { ObjectId } = await import('mongodb');
+
+  const docs = await col
+    .find(
+      { firm_id: firmId },
+      { projection: { _id: 1, calculated_at: 1 } },
+    )
+    .toArray();
+
+  if (docs.length <= 1) {
+    console.log('[cleanup] calculated_kpis: nothing to clean');
+    return;
+  }
+
+  const best = docs.reduce((a, b) =>
+    new Date(a.calculated_at) >= new Date(b.calculated_at) ? a : b,
+  );
+
+  const idsToDelete = docs
+    .filter(d => !new ObjectId(d._id!.toString()).equals(new ObjectId(best._id!.toString())))
+    .map(d => new ObjectId(d._id!.toString()));
+
+  const result = await col.deleteMany({ firm_id: firmId, _id: { $in: idsToDelete } });
+  console.log(`[cleanup] calculated_kpis: deleted ${result.deletedCount} duplicate(s), kept 1`);
 }
 
 // ---------------------------------------------------------------------------
