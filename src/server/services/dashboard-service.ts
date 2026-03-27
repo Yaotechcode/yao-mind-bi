@@ -21,6 +21,23 @@ import { getLatestCalculatedKpis, getLatestEnrichedEntities } from '../lib/mongo
 import { getFirmConfig } from './config-service.js';
 
 // ---------------------------------------------------------------------------
+// Date coercion helper
+// ---------------------------------------------------------------------------
+
+/** Safely coerce any date-like value (Date object, BSON $date, string) to an
+ *  ISO string. Returns null for null / undefined / empty values so callers
+ *  can keep their existing `if (!dateStr) continue` guards. */
+function toDateString(val: unknown): string | null {
+  if (!val) return null;
+  if (typeof val === 'string') return val;
+  if (val instanceof Date) return val.toISOString();
+  if (typeof val === 'object' && val !== null && '$date' in val) {
+    return new Date((val as { $date: string }).$date).toISOString();
+  }
+  return String(val);
+}
+
+// ---------------------------------------------------------------------------
 // Filter / pagination types
 // ---------------------------------------------------------------------------
 
@@ -242,7 +259,7 @@ export async function getFirmOverviewData(firmId: string): Promise<FirmOverviewP
   const trendMap = new Map<string, number>();
   for (const inv of invoices) {
     const invRec = inv as unknown as Record<string, unknown>;
-    const dateStr = invRec['invoiceDate'] as string | undefined;
+    const dateStr = toDateString(invRec['invoiceDate']);
     if (!dateStr) continue;
     const period = dateStr.slice(0, 7); // YYYY-MM
     const total = (invRec['total'] as number | undefined) ?? 0;
@@ -367,7 +384,7 @@ export async function getFeeEarnerPerformanceData(
   for (const te of timeEntries) {
     const teRec = te as unknown as Record<string, unknown>;
     const name = (te.lawyerName ?? teRec['responsibleLawyer']) as string | undefined;
-    const dateStr = teRec['date'] as string | undefined;
+    const dateStr = toDateString(teRec['date']);
     if (!name || !dateStr) continue;
     if (!entryDatesByLawyer.has(name)) entryDatesByLawyer.set(name, new Set());
     entryDatesByLawyer.get(name)!.add(dateStr.slice(0, 10));
@@ -653,7 +670,7 @@ export async function getBillingCollectionsData(
   const periodStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const currentPeriod = filteredInvoices.filter(inv => {
     const invRec = inv as unknown as Record<string, unknown>;
-    const dateStr = invRec['invoiceDate'] as string | undefined;
+    const dateStr = toDateString(invRec['invoiceDate']);
     if (!dateStr) return false;
     return new Date(dateStr) >= periodStart;
   });
@@ -689,7 +706,7 @@ export async function getBillingCollectionsData(
   const trendMap = new Map<string, { invoiced: number; collected: number; writeOff: number }>();
   for (const inv of filteredInvoices) {
     const invRec = inv as unknown as Record<string, unknown>;
-    const dateStr = invRec['invoiceDate'] as string | undefined;
+    const dateStr = toDateString(invRec['invoiceDate']);
     if (!dateStr) continue;
     const period = dateStr.slice(0, 7);
     const acc = trendMap.get(period) ?? { invoiced: 0, collected: 0, writeOff: 0 };
@@ -712,7 +729,7 @@ export async function getBillingCollectionsData(
       invoiceNumber: (invRec['invoiceNumber'] as string | null | undefined) ?? null,
       clientName: (inv.clientName as string | undefined) ?? (invRec['clients'] as string | undefined) ?? 'Unknown',
       matterNumber: String((invRec['matterNumber'] as unknown) ?? ''),
-      invoiceDate: (invRec['invoiceDate'] as string | undefined) ?? '',
+      invoiceDate: toDateString(invRec['invoiceDate']) ?? '',
       total: (invRec['total'] as number | undefined) ?? 0,
       outstanding,
       paid: (invRec['paid'] as number | undefined) ?? 0,
@@ -871,11 +888,11 @@ export async function getMatterAnalysisData(
       healthRag: getRag(ragAssignments, 'F-CS-03', m.matterId ?? m.matterNumber ?? ''),
       wipEntries: matterTEs.slice(0, 20).map(te => {
         const teRec = te as unknown as Record<string, unknown>;
-        return { date: (teRec['date'] as string | undefined) ?? '', lawyerName: (te.lawyerName ?? 'Unknown') as string, hours: (te.durationHours ?? 0) as number, value: (te.recordedValue ?? 0) as number, rate: (teRec['rate'] as number | undefined) ?? 0 };
+        return { date: toDateString(teRec['date']) ?? '', lawyerName: (te.lawyerName ?? 'Unknown') as string, hours: (te.durationHours ?? 0) as number, value: (te.recordedValue ?? 0) as number, rate: (teRec['rate'] as number | undefined) ?? 0 };
       }),
       invoices: matterInvs.slice(0, 10).map(inv => {
         const invRec = inv as unknown as Record<string, unknown>;
-        return { invoiceNumber: (invRec['invoiceNumber'] as string | null | undefined) ?? null, date: (invRec['invoiceDate'] as string | undefined) ?? '', total: (invRec['total'] as number | undefined) ?? 0, outstanding: (invRec['outstanding'] as number | undefined) ?? 0, paid: (invRec['paid'] as number | undefined) ?? 0 };
+        return { invoiceNumber: (invRec['invoiceNumber'] as string | null | undefined) ?? null, date: toDateString(invRec['invoiceDate']) ?? '', total: (invRec['total'] as number | undefined) ?? 0, outstanding: (invRec['outstanding'] as number | undefined) ?? 0, paid: (invRec['paid'] as number | undefined) ?? 0 };
       }),
       profitability: {
         revenue: m.invoicedNetBilling,
@@ -1027,7 +1044,7 @@ export async function getClientIntelligenceData(
         const invRec = inv as unknown as Record<string, unknown>;
         return {
           invoiceNumber: (invRec['invoiceNumber'] as string | null | undefined) ?? null,
-          date: (invRec['invoiceDate'] as string | undefined) ?? '',
+          date: toDateString(invRec['invoiceDate']) ?? '',
           total: (invRec['total'] as number | undefined) ?? 0,
           outstanding: (invRec['outstanding'] as number | undefined) ?? 0,
         };

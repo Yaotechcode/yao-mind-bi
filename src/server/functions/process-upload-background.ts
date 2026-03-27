@@ -85,6 +85,8 @@ export const handler: Handler = async (event) => {
     // ── Stages 3–7 + persist ──────────────────────────────────────────────────
     const result = await runPipelineFromStored({ firmId, uploadId, fileType });
 
+    await updateUploadStatus(firmId, uploadId, 'processed');
+
     console.log(
       `[process-upload-background] firmId=${firmId} uploadId=${uploadId} fileType=${fileType}`,
       `stages=${result.stagesCompleted.join(',')}`,
