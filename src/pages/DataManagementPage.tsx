@@ -657,6 +657,7 @@ export default function DataManagementPage() {
     };
   }, []);
 
+  const handleDeleteDataset = useCallback(
     (fileType: string) => {
       if (deleteConfirm !== fileType) {
         setDeleteConfirm(fileType);
