@@ -2,7 +2,7 @@
  * DataManagementPage — Upload, review, and manage firm data.
  */
 
-import { useState, useCallback, useRef, useMemo, useEffect, Fragment } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect, Fragment, type FC } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Upload, FileJson, FileSpreadsheet, FileText, CheckCircle2, XCircle,
