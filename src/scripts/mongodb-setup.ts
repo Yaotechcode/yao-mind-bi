@@ -45,10 +45,15 @@ async function setup(): Promise<void> {
 
   // ---------------------------------------------------------------------------
   // enriched_entities
+  // Unique on (firm_id, entity_type, chunk_index) — one doc per chunk.
+  // Secondary index on (firm_id, entity_type) for fast chunk retrieval.
   // ---------------------------------------------------------------------------
   const enrichedEntities = db.collection('enriched_entities');
+  await enrichedEntities.createIndex(
+    { firm_id: 1, entity_type: 1, chunk_index: 1 },
+    { unique: true },
+  );
   await enrichedEntities.createIndex({ firm_id: 1, entity_type: 1 });
-  await enrichedEntities.createIndex({ firm_id: 1, entity_type: 1, updated_at: -1 });
   console.log('enriched_entities: indexes created');
 
   // ---------------------------------------------------------------------------
