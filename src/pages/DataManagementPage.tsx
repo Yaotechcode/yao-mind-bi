@@ -723,8 +723,20 @@ export default function DataManagementPage() {
     },
     {
       key: 'dateLoaded',
-      header: 'Date Loaded',
-      render: (v) => v ? new Date(String(v)).toLocaleDateString() : '—',
+      header: 'Last Uploaded',
+      render: (v) => {
+        if (!v) return <span className="text-muted-foreground">—</span>;
+        const d = new Date(String(v));
+        const day = d.getDate();
+        const mon = d.toLocaleDateString('en-GB', { month: 'short' });
+        const year = d.getFullYear();
+        const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        return (
+          <span className="text-muted-foreground text-xs">
+            {day} {mon} {year} <span className="mx-0.5">•</span> {time}
+          </span>
+        );
+      },
     },
     {
       key: 'status',
