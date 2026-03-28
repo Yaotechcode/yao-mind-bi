@@ -41,8 +41,8 @@ export const FILE_TYPE_SIGNATURES: Record<string, FileTypeSignature> = {
   fullMattersJson: {
     label: 'Full Matters',
     requiredColumns: [],
-    strongSignalColumns: ['matternumber', 'matterid', 'responsiblelawyer', 'status', 'createdate', 'department'],
-    weakSignalColumns: ['budget', 'client', 'casetype', 'netbilling'],
+    strongSignalColumns: ['matternumber', 'matterid', 'status', 'createdate', 'department'],
+    weakSignalColumns: ['budget', 'client', 'casetype', 'netbilling', 'responsiblelawyer'],
     format: 'json',
   },
   closedMattersJson: {
@@ -83,8 +83,8 @@ export const FILE_TYPE_SIGNATURES: Record<string, FileTypeSignature> = {
   lawyersJson: {
     label: 'Lawyers (ID Lookup)',
     requiredColumns: [],
-    strongSignalColumns: ['lawyerid', 'lawyername'],
-    weakSignalColumns: ['attorneyid', 'attorneyname', 'name'],
+    strongSignalColumns: ['attorneyid', 'responsiblelawyer'],
+    weakSignalColumns: ['lawyerid', 'lawyername'],
     format: 'json',
   },
 } as const;
