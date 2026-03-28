@@ -124,8 +124,8 @@ async function apiFetch<T>(
   }
 
   if (response.status === 401) {
-    // Session expired — redirect to auth
-    window.location.href = '/auth';
+    // Session expired — redirect to login
+    window.location.href = '/login';
     throw new ApiError('Session expired', 401);
   }
 
@@ -165,7 +165,7 @@ async function apiFetchBlob(
   }
 
   if (response.status === 401) {
-    window.location.href = '/auth';
+    window.location.href = '/login';
     throw new ApiError('Session expired', 401);
   }
 
@@ -244,7 +244,7 @@ export async function uploadFile(
       throw new ApiError('Upload failed — network error', 0, err);
     }
     if (response.status === 401) {
-      window.location.href = '/auth';
+    window.location.href = '/login';
       throw new ApiError('Session expired', 401);
     }
     if (!response.ok) {
@@ -330,7 +330,7 @@ export async function fetchUploadStatus(limit = 20): Promise<UploadStatusEntry[]
   }
 
   if (response.status === 401) {
-    window.location.href = '/auth';
+    window.location.href = '/login';
     throw new ApiError('Session expired', 401);
   }
 

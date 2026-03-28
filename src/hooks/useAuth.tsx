@@ -1,4 +1,4 @@
-import { useState, useEffect, createContext, useContext, type ReactNode } from 'react';
+import { useState, useEffect, createContext, useContext, useCallback, type ReactNode } from 'react';
 import type { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -37,10 +37,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [isYaoAdmin, setIsYaoAdmin] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true); // starts TRUE — critical
   const [roleLoading, setRoleLoading] = useState(true);
 
-  const fetchProfile = async (userId: string) => {
+  const fetchProfile = useCallback(async (userId: string) => {
     setRoleLoading(true);
     try {
       const { data, error } = await supabase
@@ -65,79 +65,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setRoleLoading(false);
     }
-  };
+  }, []);
 
-  const refreshProfile = async () => {
+  const refreshProfile = useCallback(async () => {
     if (user) await fetchProfile(user.id);
-  };
+  }, [user, fetchProfile]);
 
   useEffect(() => {
-    let isMounted = true;
+    let mounted = true;
 
-    const loadingTimeout = setTimeout(() => {
-      if (isMounted && loading) {
-        console.warn('[AuthProvider] Auth loading timeout after 8s — forcing completion');
+    // 1. Get initial session — only set loading=false AFTER this resolves
+    supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
+      if (!mounted) return;
+      setSession(initialSession);
+      setUser(initialSession?.user ?? null);
+
+      if (initialSession?.user) {
+        fetchProfile(initialSession.user.id).finally(() => {
+          if (mounted) setLoading(false);
+        });
+      } else {
+        setRoleLoading(false);
         setLoading(false);
       }
-    }, 8000);
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (!isMounted) return;
-
-      if (_event === 'TOKEN_REFRESHED') {
-        setSession(nextSession);
-        setUser(nextSession?.user ?? null);
-        return;
-      }
-
-      setSession(nextSession);
-      setUser(nextSession?.user ?? null);
-
-      if (nextSession?.user) {
-        setTimeout(() => {
-          if (!isMounted) return;
-          fetchProfile(nextSession.user.id).finally(() => {
-            if (isMounted) setLoading(false);
-          });
-        }, 0);
-      } else {
-        setProfile(null);
-        setIsYaoAdmin(false);
+    }).catch((error) => {
+      console.error('[AuthProvider] getSession error:', error);
+      if (mounted) {
         setRoleLoading(false);
         setLoading(false);
       }
     });
 
-    supabase.auth.getSession()
-      .then(({ data: { session: initialSession } }) => {
-        if (!isMounted) return;
-        setSession(initialSession);
-        setUser(initialSession?.user ?? null);
+    // 2. Listen for auth state changes (sign in, sign out, token refresh)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!mounted) return;
 
-        if (initialSession?.user) {
-          setTimeout(() => {
-            if (!isMounted) return;
-            fetchProfile(initialSession.user.id).finally(() => {
-              if (isMounted) setLoading(false);
-            });
-          }, 0);
-        } else {
-          setLoading(false);
-        }
-      })
-      .catch((error) => {
-        console.error('[AuthProvider] getSession error:', error);
-        if (isMounted) setLoading(false);
-      });
+      setSession(nextSession);
+      setUser(nextSession?.user ?? null);
+
+      if (nextSession?.user) {
+        // Defer to avoid Supabase deadlock
+        setTimeout(() => {
+          if (mounted) fetchProfile(nextSession.user.id);
+        }, 0);
+      } else {
+        setProfile(null);
+        setIsYaoAdmin(false);
+        setRoleLoading(false);
+      }
+    });
 
     return () => {
-      isMounted = false;
-      clearTimeout(loadingTimeout);
+      mounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const signIn = async (email: string, password: string): Promise<AuthResult> => {
+  const signIn = useCallback(async (email: string, password: string): Promise<AuthResult> => {
     try {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
@@ -145,17 +129,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       return { error: error as Error };
     }
-  };
+  }, []);
 
-  const signOut = async () => {
+  const signOut = useCallback(async () => {
     setProfile(null);
     setIsYaoAdmin(false);
     setUser(null);
     setSession(null);
     const { error } = await supabase.auth.signOut({ scope: 'local' });
     if (error) console.error('[AuthProvider] Sign out error:', error);
-    window.location.href = '/auth';
-  };
+    window.location.href = '/login';
+  }, []);
 
   return (
     <AuthContext.Provider value={{
