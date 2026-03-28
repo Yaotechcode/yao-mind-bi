@@ -254,6 +254,7 @@ const FILE_TYPE_TO_ENTITY_KEY: Record<string, string> = {
   contactsJson: 'client',
   disbursementsJson: 'disbursement',
   tasksJson: 'task',
+  lawyersJson: 'lawyer',
 };
 
 const ENTITY_KEY_TO_ENUM: Record<string, EntityType> = {
@@ -264,6 +265,7 @@ const ENTITY_KEY_TO_ENUM: Record<string, EntityType> = {
   client: 'client' as EntityType,
   disbursement: 'disbursement' as EntityType,
   task: 'task' as EntityType,
+  lawyer: 'lawyer' as EntityType,
 };
 
 // ---------------------------------------------------------------------------

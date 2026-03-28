@@ -20,6 +20,7 @@ import type {
 
 /** Dataset priority order for conflict resolution (highest quality first). */
 const DATASET_PRIORITY: string[] = [
+  'lawyersJson',      // Authoritative attorney ID → name lookup table
   'fullMattersJson',
   'closedMattersJson',
   'wipJson',

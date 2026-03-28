@@ -80,6 +80,13 @@ export const FILE_TYPE_SIGNATURES: Record<string, FileTypeSignature> = {
     weakSignalColumns: ['title', 'description'],
     format: 'json',
   },
+  lawyersJson: {
+    label: 'Lawyers (ID Lookup)',
+    requiredColumns: [],
+    strongSignalColumns: ['lawyerid', 'lawyername'],
+    weakSignalColumns: ['attorneyid', 'attorneyname', 'name'],
+    format: 'json',
+  },
 } as const;
 
 // ---------------------------------------------------------------------------

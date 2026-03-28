@@ -15,6 +15,7 @@ export enum EntityType {
   DEPARTMENT = 'department',
   TASK = 'task',
   FIRM = 'firm',
+  LAWYER = 'lawyer',
 }
 
 export enum PayModel {

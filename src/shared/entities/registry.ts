@@ -730,7 +730,34 @@ const taskEntity: EntityDefinition = {
 };
 
 // ---------------------------------------------------------------------------
-// Entity 9: Firm
+// Entity 9: Lawyer (ID lookup)
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal entity for the Lawyers.json lookup file.
+ * Contains only attorney_id → name mappings; used by the cross-reference stage
+ * to resolve lawyerId to lawyerName across all other datasets.
+ */
+const lawyerEntity: EntityDefinition = {
+  entityType: EntityType.LAWYER,
+  label: 'Lawyer',
+  labelPlural: 'Lawyers',
+  icon: '⚖️',
+  description: 'Attorney ID → name lookup table. Used during pipeline enrichment to resolve attorney IDs to display names.',
+  isBuiltIn: true,
+  dataSource: 'lawyersJson',
+  primaryKey: 'lawyerId',
+  displayField: 'lawyerName',
+  supportsCustomFields: false,
+  fields: [
+    f('lawyerId', 'Lawyer ID', FieldType.STRING, true),
+    f('lawyerName', 'Lawyer Name', FieldType.STRING, true),
+  ],
+  relationships: [],
+};
+
+// ---------------------------------------------------------------------------
+// Entity 10: Firm
 // ---------------------------------------------------------------------------
 
 const firmEntity: EntityDefinition = {
@@ -799,6 +826,7 @@ const BUILT_IN_ENTITIES: EntityDefinition[] = [
   disbursementEntity,
   departmentEntity,
   taskEntity,
+  lawyerEntity,
   firmEntity,
 ];
 
