@@ -841,10 +841,23 @@ export default function DataManagementPage() {
 
       {/* Loaded datasets */}
       <DashboardSection title="Loaded Datasets">
-        <SortableTable
-          columns={datasetColumns}
-          data={datasetsTableData as unknown as Record<string, unknown>[]}
-        />
+        {loadingDatasets ? (
+          <div className="divide-y divide-border">
+            {Array.from({ length: FILE_TYPES.length }).map((_, i) => (
+              <div key={i} className="flex items-center gap-4 px-4 py-3">
+                <Skeleton className="h-4 w-28" />
+                <Skeleton className="h-4 w-16 ml-auto" />
+                <Skeleton className="h-4 w-32" />
+                <Skeleton className="h-4 w-20" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <SortableTable
+            columns={datasetColumns}
+            data={datasetsTableData as unknown as Record<string, unknown>[]}
+          />
+        )}
       </DashboardSection>
 
       {/* Run Calculations */}
