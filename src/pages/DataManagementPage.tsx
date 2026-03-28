@@ -17,6 +17,7 @@ import { DashboardSection } from '@/components/common/DashboardSection';
 import { SortableTable, type ColumnDef } from '@/components/common/SortableTable';
 import { AlertCard } from '@/components/common/AlertCard';
 import { EmptyState } from '@/components/common/EmptyState';
+import { Skeleton } from '@/components/ui/skeleton';
 import { ProgressBar } from '@/components/common/ProgressBar';
 import { useUpload } from '@/hooks/useUpload';
 import { fetchConfig, updateConfig, fetchUploadStatus, triggerCalculation, type UploadStatusEntry } from '@/lib/api-client';
