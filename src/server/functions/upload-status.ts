@@ -27,7 +27,6 @@ const DATASETS: DatasetMeta[] = [
   { fileType: 'contactsJson',      label: 'Contacts' },
   { fileType: 'disbursementsJson', label: 'Disbursements' },
   { fileType: 'tasksJson',         label: 'Tasks' },
-  { fileType: 'lawyersJson',       label: 'Lawyers' },
 ];
 
 // ---------------------------------------------------------------------------
