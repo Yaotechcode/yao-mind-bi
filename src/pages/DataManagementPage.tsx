@@ -3,6 +3,7 @@
  */
 
 import { useState, useCallback, useRef, useMemo, useEffect, Fragment, type FC } from 'react';
+import { useAuth } from '@/hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
 import {
   Upload, FileJson, FileSpreadsheet, FileText, CheckCircle2, XCircle,
