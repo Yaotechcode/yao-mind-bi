@@ -468,8 +468,10 @@ export default function DataManagementPage() {
 
   // Upload status from API — never clear while refreshing
   const [loadedDatasets, setLoadedDatasets] = useState<LoadedDataset[]>([]);
+  const [loadingDatasets, setLoadingDatasets] = useState(true);
   const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
   const hasFetchedRef = useRef(false);
+  const { user, loading: authLoading } = useAuth();
 
   const refreshUploadStatus = useCallback(async () => {
     setIsRefreshingStatus(true);
@@ -488,6 +490,7 @@ export default function DataManagementPage() {
       // Silently fail — keep showing last known good state
     } finally {
       setIsRefreshingStatus(false);
+      setLoadingDatasets(false);
     }
   }, []);
 
@@ -507,12 +510,17 @@ export default function DataManagementPage() {
     });
   }, []);
 
-  // Fetch on mount only — guard against StrictMode double-invoke
+  // Fetch on mount only — wait for auth, guard against StrictMode double-invoke
   useEffect(() => {
+    if (authLoading || !user) {
+      // If auth resolved with no user, stop loading indicator
+      if (!authLoading && !user) setLoadingDatasets(false);
+      return;
+    }
     if (hasFetchedRef.current) return;
     hasFetchedRef.current = true;
     refreshUploadStatus();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [authLoading, user, refreshUploadStatus]);
   const [qualityIssues] = useState<QualityIssue[]>([]);
   const [feeEarners] = useState<FeeEarnerRow[]>([]);
   const [mappingTemplates] = useState<MappingTemplateRow[]>([]);
