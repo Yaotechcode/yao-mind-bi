@@ -3,6 +3,7 @@
  */
 
 import { useState, useCallback, useRef, useMemo, useEffect, Fragment, type FC } from 'react';
+import { useAuth } from '@/hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
 import {
   Upload, FileJson, FileSpreadsheet, FileText, CheckCircle2, XCircle,
@@ -16,6 +17,7 @@ import { DashboardSection } from '@/components/common/DashboardSection';
 import { SortableTable, type ColumnDef } from '@/components/common/SortableTable';
 import { AlertCard } from '@/components/common/AlertCard';
 import { EmptyState } from '@/components/common/EmptyState';
+import { Skeleton } from '@/components/ui/skeleton';
 import { ProgressBar } from '@/components/common/ProgressBar';
 import { useUpload } from '@/hooks/useUpload';
 import { fetchConfig, updateConfig, fetchUploadStatus, triggerCalculation, type UploadStatusEntry } from '@/lib/api-client';
@@ -467,8 +469,10 @@ export default function DataManagementPage() {
 
   // Upload status from API — never clear while refreshing
   const [loadedDatasets, setLoadedDatasets] = useState<LoadedDataset[]>([]);
+  const [loadingDatasets, setLoadingDatasets] = useState(true);
   const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
   const hasFetchedRef = useRef(false);
+  const { user, loading: authLoading } = useAuth();
 
   const refreshUploadStatus = useCallback(async () => {
     setIsRefreshingStatus(true);
@@ -487,6 +491,7 @@ export default function DataManagementPage() {
       // Silently fail — keep showing last known good state
     } finally {
       setIsRefreshingStatus(false);
+      setLoadingDatasets(false);
     }
   }, []);
 
@@ -506,12 +511,17 @@ export default function DataManagementPage() {
     });
   }, []);
 
-  // Fetch on mount only — guard against StrictMode double-invoke
+  // Fetch on mount only — wait for auth, guard against StrictMode double-invoke
   useEffect(() => {
+    if (authLoading || !user) {
+      // If auth resolved with no user, stop loading indicator
+      if (!authLoading && !user) setLoadingDatasets(false);
+      return;
+    }
     if (hasFetchedRef.current) return;
     hasFetchedRef.current = true;
     refreshUploadStatus();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [authLoading, user, refreshUploadStatus]);
   const [qualityIssues] = useState<QualityIssue[]>([]);
   const [feeEarners] = useState<FeeEarnerRow[]>([]);
   const [mappingTemplates] = useState<MappingTemplateRow[]>([]);
@@ -831,10 +841,23 @@ export default function DataManagementPage() {
 
       {/* Loaded datasets */}
       <DashboardSection title="Loaded Datasets">
-        <SortableTable
-          columns={datasetColumns}
-          data={datasetsTableData as unknown as Record<string, unknown>[]}
-        />
+        {loadingDatasets ? (
+          <div className="divide-y divide-border">
+            {Array.from({ length: FILE_TYPES.length }).map((_, i) => (
+              <div key={i} className="flex items-center gap-4 px-4 py-3">
+                <Skeleton className="h-4 w-28" />
+                <Skeleton className="h-4 w-16 ml-auto" />
+                <Skeleton className="h-4 w-32" />
+                <Skeleton className="h-4 w-20" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <SortableTable
+            columns={datasetColumns}
+            data={datasetsTableData as unknown as Record<string, unknown>[]}
+          />
+        )}
       </DashboardSection>
 
       {/* Run Calculations */}
