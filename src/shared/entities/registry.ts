@@ -189,7 +189,7 @@ const matterEntity: EntityDefinition = {
   supportsCustomFields: true,
   fields: [
     f('matterId', 'Matter ID', FieldType.STRING, true),
-    f('matterNumber', 'Matter Number', FieldType.NUMBER, true),
+    f('matterNumber', 'Matter Number', FieldType.STRING, true),
     f('status', 'Status', FieldType.SELECT, true, {
       options: [
         'IN_PROGRESS',
@@ -342,7 +342,7 @@ const timeEntryEntity: EntityDefinition = {
       defaultValue: 0,
     }),
     f('matterId', 'Matter ID', FieldType.STRING, true),
-    f('matterNumber', 'Matter Number', FieldType.NUMBER, true),
+    f('matterNumber', 'Matter Number', FieldType.STRING, true),
     f('departmentId', 'Department ID', FieldType.STRING, false),
     f('department', 'Department', FieldType.STRING, false),
     f('caseTypeId', 'Case Type ID', FieldType.STRING, false),
@@ -460,7 +460,7 @@ const invoiceEntity: EntityDefinition = {
     }),
     f('responsibleLawyer', 'Responsible Lawyer', FieldType.STRING, true),
     f('responsibleLawyerId', 'Responsible Lawyer ID', FieldType.STRING, false),
-    f('matterNumber', 'Matter Number', FieldType.NUMBER, true),
+    f('matterNumber', 'Matter Number', FieldType.STRING, true),
     f('matterId', 'Matter ID', FieldType.STRING, false),
     f('matterStatus', 'Matter Status', FieldType.STRING, false),
     // Extensible
@@ -575,7 +575,7 @@ const disbursementEntity: EntityDefinition = {
     f('subtotal', 'Subtotal', FieldType.CURRENCY, true),
     f('date', 'Date', FieldType.DATE, true),
     f('matterId', 'Matter ID', FieldType.STRING, true),
-    f('matterNumber', 'Matter Number', FieldType.NUMBER, true),
+    f('matterNumber', 'Matter Number', FieldType.STRING, true),
     f('responsibleLawyerId', 'Responsible Lawyer ID', FieldType.STRING, true),
     f('departmentId', 'Department ID', FieldType.STRING, false),
     f('clientId', 'Client ID', FieldType.STRING, false, {
@@ -693,7 +693,7 @@ const taskEntity: EntityDefinition = {
     f('taskId', 'Task ID', FieldType.STRING, true),
     f('dueDate', 'Due Date', FieldType.DATE, true),
     f('matterId', 'Matter ID', FieldType.STRING, true),
-    f('matterNumber', 'Matter Number', FieldType.NUMBER, true),
+    f('matterNumber', 'Matter Number', FieldType.STRING, true),
     f('title', 'Title', FieldType.STRING, true),
     f('description', 'Description', FieldType.STRING, false),
     f('lawyerId', 'Lawyer ID', FieldType.STRING, true),
