@@ -58,7 +58,18 @@ const leakageColumns: ColumnDef[] = [
     key: 'ragStatus',
     header: 'RAG',
     align: 'center',
-    render: (v) => <RagBadge status={v as 'green' | 'amber' | 'red' | 'neutral'} />,
+    render: (v) => {
+      const s = (v as string) || 'neutral';
+      const labels: Record<string, string> = {
+        green: 'Low', amber: 'Medium', red: 'High', neutral: '—',
+      };
+      return (
+        <RagBadge
+          status={s as 'green' | 'amber' | 'red' | 'neutral'}
+          label={labels[s] ?? s}
+        />
+      );
+    },
   },
 ];
 
