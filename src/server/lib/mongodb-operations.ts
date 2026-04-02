@@ -175,8 +175,11 @@ export async function getLatestEnrichedEntities(
 
 /**
  * Store enriched entity records in chunks of ENRICHED_CHUNK_SIZE to stay
- * under MongoDB's 16MB document limit. Deletes all existing chunks for the
- * (firm_id, entity_type) pair first, then inserts fresh chunks.
+ * under MongoDB's 16MB document limit. Uses replaceOne+upsert keyed on
+ * { firm_id, entity_type, chunk_index } — atomic per chunk, eliminates the
+ * deleteMany → insertOne race condition under concurrent pipeline runs.
+ * After writing all current chunks, deletes any stale chunks with a higher
+ * chunk_index than the new total (handles shrinking datasets).
  */
 export async function storeEnrichedEntities(
   firmId: string,
@@ -187,28 +190,36 @@ export async function storeEnrichedEntities(
 ): Promise<void> {
   const col = await getCollection<EnrichedEntitiesDocument>('enriched_entities');
 
-  // Delete ALL existing chunks before writing fresh ones
-  await col.deleteMany({ firm_id: firmId, entity_type: entityType });
-
   const totalChunks = Math.max(1, Math.ceil(records.length / ENRICHED_CHUNK_SIZE));
   const dataVersion = new Date().toISOString();
   const now = new Date();
 
   for (let i = 0; i < totalChunks; i++) {
     const chunk = records.slice(i * ENRICHED_CHUNK_SIZE, (i + 1) * ENRICHED_CHUNK_SIZE);
-    await col.insertOne({
-      firm_id: firmId,
-      entity_type: entityType,
-      data_version: dataVersion,
-      chunk_index: i,
-      total_chunks: totalChunks,
-      source_uploads: sourceUploads,
-      records: chunk,
-      record_count: records.length, // total across all chunks — stored on every chunk
-      data_quality: i === 0 ? dataQuality : undefined,
-      created_at: now,
-    } as EnrichedEntitiesDocument);
+    await col.replaceOne(
+      { firm_id: firmId, entity_type: entityType, chunk_index: i },
+      {
+        firm_id: firmId,
+        entity_type: entityType,
+        data_version: dataVersion,
+        chunk_index: i,
+        total_chunks: totalChunks,
+        source_uploads: sourceUploads,
+        records: chunk,
+        record_count: records.length, // total across all chunks — stored on every chunk
+        data_quality: i === 0 ? dataQuality : undefined,
+        created_at: now,
+      } as EnrichedEntitiesDocument,
+      { upsert: true },
+    );
   }
+
+  // Remove stale chunks from a previous run that had more chunks than the current one
+  await col.deleteMany({
+    firm_id: firmId,
+    entity_type: entityType,
+    chunk_index: { $gte: totalChunks },
+  });
 }
 
 /**
@@ -493,9 +504,11 @@ const CHUNK_SIZE = 5000;
 
 /**
  * Store the normalised dataset for a file type in chunks of CHUNK_SIZE records
- * to stay under MongoDB's 16MB document size limit.
- * Deletes all existing chunks for the (firm_id, file_type) pair first, then
- * inserts fresh chunks — avoids replaceOne-with-upsert races on chunk count changes.
+ * to stay under MongoDB's 16MB document size limit. Uses replaceOne+upsert
+ * keyed on { firm_id, file_type, chunk_index } — atomic per chunk, eliminates
+ * the deleteMany → insertOne race condition under concurrent pipeline runs.
+ * After writing all current chunks, deletes any stale chunks with a higher
+ * chunk_index than the new total (handles shrinking datasets).
  */
 export async function storeNormalisedDataset(
   firmId: string,
@@ -506,30 +519,34 @@ export async function storeNormalisedDataset(
 ): Promise<void> {
   const col = await getCollection<NormalisedDatasetDocument>('normalised_datasets');
 
-  // Delete ALL existing chunks for this firm + fileType before writing fresh ones.
-  // This is the correct replace-all pattern — do not move this after any insert.
-  const { deletedCount } = await col.deleteMany({ firm_id: firmId, file_type: fileType });
-  if (deletedCount > 0) {
-    console.log(`[storeNormalisedDataset] deleted ${deletedCount} stale chunk(s) for ${fileType}`);
-  }
-
   const totalChunks = Math.max(1, Math.ceil(records.length / CHUNK_SIZE));
   const now = new Date();
 
   for (let i = 0; i < totalChunks; i++) {
     const chunk = records.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-    await col.insertOne({
-      firm_id: firmId,
-      file_type: fileType,
-      entity_key: entityKey,
-      source_upload_id: sourceUploadId,
-      chunk_index: i,
-      total_chunks: totalChunks,
-      records: chunk as Record<string, unknown>[],
-      record_count: records.length,
-      normalised_at: now,
-    } as NormalisedDatasetDocument);
+    await col.replaceOne(
+      { firm_id: firmId, file_type: fileType, chunk_index: i },
+      {
+        firm_id: firmId,
+        file_type: fileType,
+        entity_key: entityKey,
+        source_upload_id: sourceUploadId,
+        chunk_index: i,
+        total_chunks: totalChunks,
+        records: chunk as Record<string, unknown>[],
+        record_count: records.length,
+        normalised_at: now,
+      } as NormalisedDatasetDocument,
+      { upsert: true },
+    );
   }
+
+  // Remove stale chunks from a previous run that had more chunks than the current one
+  await col.deleteMany({
+    firm_id: firmId,
+    file_type: fileType,
+    chunk_index: { $gte: totalChunks },
+  });
 }
 
 /**
