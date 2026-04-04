@@ -33,6 +33,7 @@ const mockFetch = vi.fn();
 beforeEach(() => {
   vi.stubGlobal('fetch', mockFetch);
   process.env['YAO_API_BASE_URL'] = 'https://api.yao.legal';
+  process.env['YAO_API_CODE']     = '12345';
   mockGetCredentials.mockResolvedValue({ email: 'test@firm.com', password: 'secret' });
 });
 
@@ -40,6 +41,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   delete process.env['YAO_API_BASE_URL'];
+  delete process.env['YAO_API_CODE'];
 });
 
 // =============================================================================
@@ -105,6 +107,31 @@ describe('authenticate()', () => {
     mockFetch.mockResolvedValueOnce(makeResponse({ user: { id: '123' } }));
     const adapter = new DataSourceAdapter('firm-1');
     await expect(adapter.authenticate()).rejects.toThrow(YaoAuthError);
+  });
+
+  it('sends code from YAO_API_CODE env var in login body', async () => {
+    process.env['YAO_API_CODE'] = '99887';
+    mockFetch.mockResolvedValueOnce(makeResponse({ access_token: 'tok' }));
+    const adapter = new DataSourceAdapter('firm-1');
+    await adapter.authenticate();
+
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body['code']).toBe(99887);
+    expect(body['email']).toBe('test@firm.com');
+    expect(body['password']).toBe('secret');
+  });
+
+  it('code is a number (not a string) in login body', async () => {
+    process.env['YAO_API_CODE'] = '42';
+    mockFetch.mockResolvedValueOnce(makeResponse({ access_token: 'tok' }));
+    const adapter = new DataSourceAdapter('firm-1');
+    await adapter.authenticate();
+
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(typeof body['code']).toBe('number');
+    expect(body['code']).toBe(42);
   });
 
   it('never logs credentials or token values', async () => {

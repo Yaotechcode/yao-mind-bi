@@ -118,10 +118,12 @@ export class DataSourceAdapter {
   async authenticate(): Promise<void> {
     const { email, password } = await getCredentials(this.firmId);
 
+    const code = Number(process.env['YAO_API_CODE']);
+
     const response = await fetch(`${this.baseUrl}/attorneys/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, code }),
     });
 
     if (!response.ok) {
