@@ -424,7 +424,7 @@ export class DataSourceAdapter {
       '/time-entries/search',
       {},
       'result',
-      'next',
+      'page',
       50,
     );
     return raw

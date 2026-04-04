@@ -84,42 +84,42 @@ describe('fetchTimeEntries()', () => {
     expect(result).toHaveLength(0);
   });
 
-  it('cursor pagination stops when next is absent', async () => {
+  it('paginates until result.length < size', async () => {
     const adapter = await authenticatedAdapter();
+    const fullPage = Array.from({ length: 50 }, (_, i) => makeEntry({ _id: `te-p1-${i}` }));
     mockFetch
-      .mockResolvedValueOnce(makeResponse({ result: [makeEntry({ _id: 'te-1' })], next: 100 }))
-      .mockResolvedValueOnce(makeResponse({ result: [makeEntry({ _id: 'te-2' })] })); // no next
+      .mockResolvedValueOnce(makeResponse({ result: fullPage }))
+      .mockResolvedValueOnce(makeResponse({ result: [makeEntry({ _id: 'te-p2-0' })] }));
 
     const result = await adapter.fetchTimeEntries();
-    expect(result).toHaveLength(2);
+    expect(result).toHaveLength(51);
     expect(mockFetch).toHaveBeenCalledTimes(3); // 1 auth + 2 pages
   });
 
-  it('cursor pagination stops when next is null', async () => {
+  it('stops after single page when result.length < size', async () => {
     const adapter = await authenticatedAdapter();
-    mockFetch
-      .mockResolvedValueOnce(makeResponse({ result: [makeEntry()], next: 50 }))
-      .mockResolvedValueOnce(makeResponse({ result: [makeEntry({ _id: 'te-2' })], next: null }));
+    mockFetch.mockResolvedValueOnce(makeResponse({ result: [makeEntry({ _id: 'te-1' }), makeEntry({ _id: 'te-2' })] }));
 
     const result = await adapter.fetchTimeEntries();
     expect(result).toHaveLength(2);
-    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch).toHaveBeenCalledTimes(2); // 1 auth + 1 page
   });
 
-  it('passes cursor value in next request body', async () => {
+  it('sends page=2 in second request body', async () => {
     const adapter = await authenticatedAdapter();
+    const fullPage = Array.from({ length: 50 }, (_, i) => makeEntry({ _id: `te-${i}` }));
     mockFetch
-      .mockResolvedValueOnce(makeResponse({ result: [makeEntry()], next: 42 }))
+      .mockResolvedValueOnce(makeResponse({ result: fullPage }))
       .mockResolvedValueOnce(makeResponse({ result: [] }));
 
     await adapter.fetchTimeEntries();
 
     const secondCall = mockFetch.mock.calls[2] as [string, RequestInit];
     const body = JSON.parse(secondCall[1].body as string) as Record<string, unknown>;
-    expect(body['next']).toBe(42);
+    expect(body['page']).toBe(2);
   });
 
-  it('first request body does not include next', async () => {
+  it('first request sends page=1 and size=50', async () => {
     const adapter = await authenticatedAdapter();
     mockFetch.mockResolvedValueOnce(makeResponse({ result: [] }));
 
@@ -127,8 +127,9 @@ describe('fetchTimeEntries()', () => {
 
     const firstCall = mockFetch.mock.calls[1] as [string, RequestInit];
     const body = JSON.parse(firstCall[1].body as string) as Record<string, unknown>;
-    expect(body).not.toHaveProperty('next');
+    expect(body['page']).toBe(1);
     expect(body['size']).toBe(50);
+    expect(body).not.toHaveProperty('next');
   });
 
   it('excludes CONSOLIDATED entries', async () => {

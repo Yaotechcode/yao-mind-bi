@@ -323,8 +323,8 @@ function jsonResponse(body: unknown, status = 200): Response {
  * stops after page 1, unless the test overrides this.
  */
 function createMockFetch(opts: {
-  /** Override time-entry cursor behaviour. Default: 1 entry, no next cursor. */
-  timeEntryCursor?: boolean;
+  /** If true, page 1 returns 50 time entries (triggering page 2 fetch). Default: false (1 entry, stops). */
+  timeEntriesMultiPage?: boolean;
   /** Override matters pagination — page 1 returns this many records. */
   mattersPage1Count?: number;
   /** Extra matters on page 2 (for pagination stop test). */
@@ -333,7 +333,7 @@ function createMockFetch(opts: {
   ledgers?: unknown[];
 }) {
   const {
-    timeEntryCursor    = false,
+    timeEntriesMultiPage = false,
     mattersPage1Count  = 1,
     mattersPage2Count  = 0,
     ledgers = [RAW_LEDGER_DISBURSEMENT, RAW_LEDGER_INVOICE_PAYMENT, RAW_LEDGER_BOTH],
@@ -374,19 +374,22 @@ function createMockFetch(opts: {
       return jsonResponse({ rows: [], limit: 100 });
     }
 
-    // ── Time entries (cursor POST) ─────────────────────────────────────────────
+    // ── Time entries (page-based POST) ───────────────────────────────────────
     if (pathname === '/time-entries/search' && method === 'POST') {
       const body = JSON.parse(init?.body as string) as Record<string, unknown>;
-      const hasNext = body['next'] !== undefined && body['next'] !== null;
+      const page = Number(body['page'] ?? 1);
 
-      if (!hasNext) {
-        // First call — return one entry + cursor if cursor mode, else no cursor
-        const next = timeEntryCursor ? 'cursor-abc-123' : undefined;
-        const result: Record<string, unknown> = { result: [RAW_TIME_ENTRY] };
-        if (next) result['next'] = next;
-        return jsonResponse(result);
+      if (page === 1) {
+        // Multi-page mode: return a full page of 50 to trigger page 2 fetch
+        if (timeEntriesMultiPage) {
+          const result = Array.from({ length: 50 }, () => ({ ...RAW_TIME_ENTRY }));
+          return jsonResponse({ result });
+        }
+        return jsonResponse({ result: [RAW_TIME_ENTRY] });
       }
-      // Subsequent call with cursor — return empty result (stop)
+      if (page === 2 && timeEntriesMultiPage) {
+        return jsonResponse({ result: [{ ...RAW_TIME_ENTRY, _id: 'te-p2-001' }] });
+      }
       return jsonResponse({ result: [] });
     }
 
@@ -595,12 +598,12 @@ describe('Test 3: matters pagination stop condition', () => {
 });
 
 // =============================================================================
-// Test 4 — Time entry cursor pagination passes correct next value
+// Test 4 — Time entry page-based pagination
 // =============================================================================
 
-describe('Test 4: time entry cursor pagination', () => {
-  it('first request has no next field in body', async () => {
-    const mockFetch = createMockFetch({ timeEntryCursor: true });
+describe('Test 4: time entry page-based pagination', () => {
+  it('first request sends page=1 and no next field', async () => {
+    const mockFetch = createMockFetch({});
     const adapter = await makeAuthenticatedAdapter(mockFetch);
 
     await adapter.fetchTimeEntries();
@@ -610,11 +613,13 @@ describe('Test 4: time entry cursor pagination', () => {
     );
 
     const firstBody = JSON.parse(teCalls[0][1].body as string) as Record<string, unknown>;
+    expect(firstBody['page']).toBe(1);
+    expect(firstBody['size']).toBe(50);
     expect(firstBody['next']).toBeUndefined();
   });
 
-  it('second request passes the cursor returned by the first response', async () => {
-    const mockFetch = createMockFetch({ timeEntryCursor: true });
+  it('second request sends page=2 when page 1 returns full page', async () => {
+    const mockFetch = createMockFetch({ timeEntriesMultiPage: true });
     const adapter = await makeAuthenticatedAdapter(mockFetch);
 
     await adapter.fetchTimeEntries();
@@ -623,19 +628,18 @@ describe('Test 4: time entry cursor pagination', () => {
       ([url]: [string]) => new URL(url).pathname === '/time-entries/search',
     );
 
-    expect(teCalls).toHaveLength(2); // first + cursor follow-up
+    expect(teCalls).toHaveLength(2); // page 1 + page 2
     const secondBody = JSON.parse(teCalls[1][1].body as string) as Record<string, unknown>;
-    expect(secondBody['next']).toBe('cursor-abc-123');
+    expect(secondBody['page']).toBe(2);
   });
 
-  it('collects entries from all pages across cursor hops', async () => {
-    // First call: 1 entry + cursor; second call: 0 entries (stop)
-    const mockFetch = createMockFetch({ timeEntryCursor: true });
+  it('collects entries from all pages', async () => {
+    // Page 1: 50 ACTIVE entries; page 2: 1 ACTIVE entry (< size → stop)
+    const mockFetch = createMockFetch({ timeEntriesMultiPage: true });
     const adapter = await makeAuthenticatedAdapter(mockFetch);
 
     const entries = await adapter.fetchTimeEntries();
-    // Only ACTIVE entries are kept; RAW_TIME_ENTRY.status === 'ACTIVE'
-    expect(entries).toHaveLength(1);
+    expect(entries).toHaveLength(51);
   });
 });
 
