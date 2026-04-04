@@ -210,6 +210,54 @@ export interface RoutedLedgers {
   disbursementRecoveries: YaoLedger[];
 }
 
+export interface YaoTask {
+  _id: string;
+  title: string;
+  priority: string;
+  status: string;
+  category?: string;
+  due_date?: string | null;
+  completed_date?: string | null;
+  description?: string;
+  estimate_time?: number;
+  notify_flag: boolean;
+  matter?: { _id: string; number: number; case_name: string };
+  assigned_to?: {
+    _id: string;
+    name: string;
+    surname: string;
+    status: string;
+    email: string;
+    // password and email_default_signature are stripped before returning
+  };
+  created_at: string;
+  updated_at: string;
+}
+
+export interface YaoContact {
+  _id: string;
+  type: 'Person' | 'Company';
+  display_name: string;
+  first_name?: string;
+  middle_name?: string;
+  last_name?: string;
+  company_name?: string;
+  email?: string;
+  mobile_phone?: string;
+  work_phone?: string;
+  address?: {
+    address_line_1?: string;
+    city?: string;
+    postal_code?: string;
+    country?: string;
+  };
+  tags?: string[];
+  is_archived: boolean;
+  law_firm: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // =============================================================================
 // Derived in-memory maps
 // =============================================================================

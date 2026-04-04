@@ -15,6 +15,8 @@ export type {
   YaoInvoiceSummary,
   YaoLedger,
   RoutedLedgers,
+  YaoTask,
+  YaoContact,
   AttorneyMap,
   DepartmentMap,
   CaseTypeMap,

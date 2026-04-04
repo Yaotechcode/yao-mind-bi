@@ -31,6 +31,8 @@ import type {
   YaoInvoiceSummary,
   YaoLedger,
   RoutedLedgers,
+  YaoTask,
+  YaoContact,
   AttorneyMap,
   DepartmentMap,
   CaseTypeMap,
@@ -523,6 +525,116 @@ export class DataSourceAdapter {
     }
 
     return result;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tasks
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetches tasks via page-based GET pagination.
+   * Excludes DELETED tasks. Strips sensitive fields from assigned_to.
+   */
+  async fetchTasks(): Promise<YaoTask[]> {
+    const raw = await this.paginateGet<Record<string, unknown>>(
+      '/tasks',
+      {},
+      'rows',
+      100,
+    );
+    return raw
+      .map((t) => stripNestedSensitiveFields(t) as unknown as YaoTask)
+      .filter((t) => t.status !== 'DELETED');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Contacts
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetches active (non-archived) contacts via page-based GET pagination.
+   */
+  async fetchContacts(): Promise<YaoContact[]> {
+    return this.paginateGet<YaoContact>(
+      '/contacts',
+      { is_archived: 'false', ids_filter: '[]', tag: '', company: '' },
+      'rows',
+      100,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // fetchAll — full pull orchestration
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Executes a complete data pull for a firm in three sequential steps:
+   *
+   * Step 1 — Lookup tables (sequential prerequisite):
+   *   attorneys, departments, case types fetched in parallel; maps built.
+   *
+   * Step 2 — Transactional data (all in parallel — independent of each other):
+   *   matters, time entries, invoices, raw ledgers, tasks, contacts.
+   *
+   * Step 3 — Summary + routing (fast, single calls):
+   *   invoice summary (single GET), ledger routing (pure function).
+   *
+   * Returns a single object containing all datasets and lookup maps.
+   */
+  async fetchAll(): Promise<{
+    attorneys: YaoAttorney[];
+    departments: YaoDepartment[];
+    caseTypes: YaoCaseType[];
+    matters: YaoMatter[];
+    timeEntries: YaoTimeEntry[];
+    invoices: YaoInvoice[];
+    ledgers: RoutedLedgers;
+    tasks: YaoTask[];
+    contacts: YaoContact[];
+    invoiceSummary: YaoInvoiceSummary;
+    maps: {
+      attorneyMap: AttorneyMap;
+      departmentMap: DepartmentMap;
+      caseTypeMap: CaseTypeMap;
+    };
+  }> {
+    // Step 1: lookup tables — must complete before transactional fetches
+    const { attorneys, departments, caseTypes, attorneyMap, departmentMap, caseTypeMap } =
+      await this.fetchLookupTables();
+
+    // Step 2: all transactional datasets in parallel
+    const [matters, timeEntries, invoices, rawLedgers, tasks, contacts] = await Promise.all([
+      this.fetchMatters(),
+      this.fetchTimeEntries(),
+      this.fetchInvoices(),
+      this.fetchLedgers(),
+      this.fetchTasks(),
+      this.fetchContacts(),
+    ]);
+
+    // Step 3: summary + routing
+    const [invoiceSummary] = await Promise.all([this.fetchInvoiceSummary()]);
+    const ledgers = this.routeLedgers(rawLedgers);
+
+    console.log(
+      `[DataSourceAdapter] fetchAll complete — matters: ${matters.length}, ` +
+        `timeEntries: ${timeEntries.length}, invoices: ${invoices.length}, ` +
+        `tasks: ${tasks.length}, contacts: ${contacts.length}`,
+    );
+
+    return {
+      attorneys,
+      departments,
+      caseTypes,
+      matters,
+      timeEntries,
+      invoices,
+      ledgers,
+      tasks,
+      contacts,
+      invoiceSummary,
+      maps: { attorneyMap, departmentMap, caseTypeMap },
+    };
   }
 
   // ---------------------------------------------------------------------------
