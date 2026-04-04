@@ -559,7 +559,7 @@ export class DataSourceAdapter {
   async fetchContacts(): Promise<YaoContact[]> {
     return this.paginateGet<YaoContact>(
       '/contacts',
-      { is_archived: 'false', ids_filter: '[]', tag: '', company: '' },
+      { is_archived: 'false' },
       'rows',
       50,
     );

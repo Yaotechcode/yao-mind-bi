@@ -206,14 +206,13 @@ describe('fetchContacts()', () => {
     expect(url).toContain('is_archived=false');
   });
 
-  it('sends required filter params', async () => {
+  it('sends page and limit query params', async () => {
     const adapter = await authenticatedAdapter();
     mockFetch.mockResolvedValueOnce(makeResponse({ rows: [] }));
 
     await adapter.fetchContacts();
 
     const [url] = mockFetch.mock.calls[1] as [string];
-    expect(url).toContain('ids_filter=');
     expect(url).toContain('page=1');
     expect(url).toContain('limit=50');
   });
