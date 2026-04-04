@@ -9,6 +9,7 @@ export type {
   YaoAttorney,
   YaoDepartment,
   YaoCaseType,
+  YaoMatter,
   AttorneyMap,
   DepartmentMap,
   CaseTypeMap,

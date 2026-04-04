@@ -43,6 +43,56 @@ export interface YaoCaseType {
   is_deleted: boolean;
 }
 
+type NestedAttorney = {
+  _id: string;
+  name: string;
+  surname: string;
+  rates: Array<{ label: string; value: number; default: boolean }>;
+};
+
+export interface YaoMatter {
+  _id: string;
+  number: number;
+  number_string?: string;
+  status: string;
+  case_name: string;
+  financial_limit: number;
+  rate: number | null;
+  client_account_balance: number;
+  office_account_balance: number;
+  linked_account_balance: number;
+  source?: string;
+  source_contact_name?: string;
+  private?: boolean;
+  responsible_lawyer?: NestedAttorney;
+  responsible_supervisor?: NestedAttorney;
+  paralegal?: NestedAttorney;
+  department?: { _id: string; title: string };
+  case_type?: { _id: string; title: string };
+  clients: Array<{
+    contact: {
+      _id: string;
+      type: string;
+      display_name: string;
+      first_name?: string;
+      last_name?: string;
+      company_name?: string;
+    };
+  }>;
+  case_contacts: Array<{
+    category: string;
+    contact: { _id: string; display_name: string; type: string };
+    reference?: string;
+  }>;
+  last_status_update?: string;
+  in_progress_date?: string;
+  completed_date?: string;
+  archived_date?: string;
+  created_at: string;
+  updated_at: string;
+  law_firm: { _id: string; name: string } | string;
+}
+
 // =============================================================================
 // Derived in-memory maps
 // =============================================================================

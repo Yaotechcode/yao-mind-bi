@@ -25,6 +25,7 @@ import type {
   YaoAttorney,
   YaoDepartment,
   YaoCaseType,
+  YaoMatter,
   AttorneyMap,
   DepartmentMap,
   CaseTypeMap,
@@ -60,6 +61,28 @@ function extractToken(body: Record<string, unknown>): string | null {
 }
 
 const RATE_LIMIT_WAIT_MS = 2000;
+
+const SENSITIVE_FIELDS = ['password', 'email_default_signature'] as const;
+
+/**
+ * Recursively strips sensitive fields from an object and any nested objects/arrays.
+ * Used to sanitise matters (which embed attorney sub-objects) before returning.
+ */
+function stripNestedSensitiveFields(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stripNestedSensitiveFields);
+  }
+  if (value !== null && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const result: Record<string, unknown> = {};
+    for (const key of Object.keys(obj)) {
+      if (SENSITIVE_FIELDS.includes(key as typeof SENSITIVE_FIELDS[number])) continue;
+      result[key] = stripNestedSensitiveFields(obj[key]);
+    }
+    return result;
+  }
+  return value;
+}
 
 // =============================================================================
 // DataSourceAdapter
@@ -287,10 +310,7 @@ export class DataSourceAdapter {
    */
   async fetchAttorneys(): Promise<YaoAttorney[]> {
     const raw = await this.request<Record<string, unknown>[]>('GET', '/attorneys');
-    return raw.map((a) => {
-      const { password: _p, email_default_signature: _e, ...safe } = a as Record<string, unknown>;
-      return safe as unknown as YaoAttorney;
-    });
+    return raw.map((a) => stripNestedSensitiveFields(a)) as unknown as YaoAttorney[];
   }
 
   /**
@@ -350,6 +370,24 @@ export class DataSourceAdapter {
       };
     }
     return map;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Matters
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetches all matters via page-based pagination.
+   * Strips password and email_default_signature from any nested attorney objects.
+   */
+  async fetchMatters(): Promise<YaoMatter[]> {
+    const raw = await this.paginateGet<Record<string, unknown>>(
+      '/matters',
+      {},
+      'rows',
+      100,
+    );
+    return raw.map((m) => stripNestedSensitiveFields(m)) as unknown as YaoMatter[];
   }
 
   // ---------------------------------------------------------------------------
