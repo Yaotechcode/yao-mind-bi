@@ -5,11 +5,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // runs (vi.mock is hoisted to the top of the file by Vitest's transformer).
 // ---------------------------------------------------------------------------
 
-const { mockInsertOne, mockReplaceOne, mockFind, mockCollection } = vi.hoisted(() => {
+const { mockInsertOne, mockReplaceOne, mockDeleteMany, mockFind, mockCollection } = vi.hoisted(() => {
   const mockInsertOne = vi.fn().mockResolvedValue({
     insertedId: { toString: () => 'mock-id-123' },
   });
   const mockReplaceOne = vi.fn().mockResolvedValue({ upsertedId: 'mock-id-456' });
+  const mockDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 });
 
   // find() returns a chainable cursor; individual tests override .toArray() as needed.
   const mockToArray = vi.fn().mockResolvedValue([]);
@@ -20,8 +21,8 @@ const { mockInsertOne, mockReplaceOne, mockFind, mockCollection } = vi.hoisted((
   };
   const mockFind = vi.fn().mockReturnValue(mockCursor);
 
-  const mockCollection = { insertOne: mockInsertOne, replaceOne: mockReplaceOne, find: mockFind };
-  return { mockInsertOne, mockReplaceOne, mockFind, mockCollection };
+  const mockCollection = { insertOne: mockInsertOne, replaceOne: mockReplaceOne, deleteMany: mockDeleteMany, find: mockFind };
+  return { mockInsertOne, mockReplaceOne, mockDeleteMany, mockFind, mockCollection };
 });
 
 vi.mock('@/server/lib/mongodb', () => ({
@@ -63,9 +64,10 @@ function setFindResult(docs: unknown[]): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Reset insertOne default after clearAllMocks wipes mock state
+  // Reset mock defaults after clearAllMocks wipes mock state
   mockInsertOne.mockResolvedValue({ insertedId: { toString: () => 'mock-id-123' } });
   mockReplaceOne.mockResolvedValue({ upsertedId: 'mock-id-456' });
+  mockDeleteMany.mockResolvedValue({ deletedCount: 0 });
   setFindResult([]);
 });
 
@@ -142,7 +144,14 @@ describe('getLatestEnrichedEntities', () => {
   });
 
   it('returns the first element from the sorted cursor', async () => {
-    const doc = { firm_id: FIRM_A, entity_type: 'matter', data_version: '2024-01-02T00:00:00.000Z' };
+    // Implementation assembles chunks: spreads first doc then sets records + record_count
+    const doc = {
+      firm_id: FIRM_A,
+      entity_type: 'matter',
+      data_version: '2024-01-02T00:00:00.000Z',
+      records: [],
+      record_count: 0,
+    };
     setFindResult([doc]);
     const result = await getLatestEnrichedEntities(FIRM_A, 'matter');
     expect(result).toEqual(doc);
@@ -165,19 +174,20 @@ describe('storeEnrichedEntities', () => {
     const records = [{ id: '1' }, { id: '2' }];
     await storeEnrichedEntities(FIRM_A, 'matter', records, ['upload-1'], undefined);
 
-    const inserted = mockInsertOne.mock.calls[0][0];
-    expect(inserted.firm_id).toBe(FIRM_A);
-    expect(inserted.entity_type).toBe('matter');
-    expect(inserted.record_count).toBe(2);
-    expect(inserted.source_uploads).toEqual(['upload-1']);
-    expect(typeof inserted.data_version).toBe('string');
+    // Implementation uses replaceOne+upsert (chunked); check the replacement doc (index 1)
+    const replaced = mockReplaceOne.mock.calls[0][1];
+    expect(replaced.firm_id).toBe(FIRM_A);
+    expect(replaced.entity_type).toBe('matter');
+    expect(replaced.record_count).toBe(2);
+    expect(replaced.source_uploads).toEqual(['upload-1']);
+    expect(typeof replaced.data_version).toBe('string');
   });
 
   it('stores the optional data_quality object', async () => {
     const dq = { quality_score: 95, issue_count: 1, issues: [] };
     await storeEnrichedEntities(FIRM_A, 'matter', [], [], dq);
-    const inserted = mockInsertOne.mock.calls[0][0];
-    expect(inserted.data_quality).toEqual(dq);
+    const replaced = mockReplaceOne.mock.calls[0][1];
+    expect(replaced.data_quality).toEqual(dq);
   });
 });
 
@@ -213,12 +223,13 @@ describe('getLatestCalculatedKpis', () => {
 describe('storeCalculatedKpis', () => {
   it('inserts with correct firm_id, config_version, and data_version', async () => {
     await storeCalculatedKpis(FIRM_A, { revenue: 100000 }, 'cfg-v1', 'data-v2');
-    const inserted = mockInsertOne.mock.calls[0][0];
-    expect(inserted.firm_id).toBe(FIRM_A);
-    expect(inserted.config_version).toBe('cfg-v1');
-    expect(inserted.data_version).toBe('data-v2');
-    expect(inserted.kpis).toEqual({ revenue: 100000 });
-    expect(inserted.calculated_at).toBeInstanceOf(Date);
+    // Implementation uses replaceOne+upsert; check the replacement doc (index 1)
+    const replaced = mockReplaceOne.mock.calls[0][1];
+    expect(replaced.firm_id).toBe(FIRM_A);
+    expect(replaced.config_version).toBe('cfg-v1');
+    expect(replaced.data_version).toBe('data-v2');
+    expect(replaced.kpis).toEqual({ revenue: 100000 });
+    expect(replaced.calculated_at).toBeInstanceOf(Date);
   });
 });
 

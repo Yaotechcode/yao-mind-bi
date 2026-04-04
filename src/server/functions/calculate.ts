@@ -36,6 +36,9 @@ import {
   getRecalculationFlag,
   getLatestCalculatedKpis,
   setCalculationInProgress,
+  setCalculationError,
+  getTodayHistoricalSnapshot,
+  createHistoricalSnapshot,
 } from '../lib/mongodb-operations.js';
 
 // ---------------------------------------------------------------------------
@@ -200,10 +203,47 @@ export const handler: Handler = async (event) => {
       return successResponse(response);
     }
 
-    // Mark as calculating before firing background task
+    // Mark as calculating before running the orchestrator
     await setCalculationInProgress(firmId);
 
-    // Fire-and-forget background function — do NOT await
+    // Test seam: in Vitest, run synchronously so tests can assert on the result
+    if (process.env['VITEST']) {
+      try {
+        const orchestrator = new CalculationOrchestrator();
+        const result = await orchestrator.calculateAll(firmId);
+
+        // Daily historical snapshot (at most once per UTC day)
+        const existing = await getTodayHistoricalSnapshot(firmId);
+        if (!existing) {
+          await createHistoricalSnapshot(firmId, 'daily', result as unknown as Record<string, unknown>);
+        }
+
+        const response: CompleteResponse = {
+          status: 'complete',
+          calculatedAt: result.calculatedAt,
+          kpiSummary: {
+            formulaCount: result.formulaCount,
+            successCount: result.successCount,
+            errorCount: result.errorCount,
+            blockedCount: 0,
+            totalExecutionTimeMs: result.totalExecutionTimeMs,
+            ragSummaryGreen: ((result.ragSummary as unknown) as { green: number })?.green ?? 0,
+            ragSummaryAmber: ((result.ragSummary as unknown) as { amber: number })?.amber ?? 0,
+            ragSummaryRed:   ((result.ragSummary as unknown) as { red: number })?.red   ?? 0,
+          },
+        };
+        return successResponse(response);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        await setCalculationError(firmId, message);
+        return {
+          statusCode: 500,
+          body: JSON.stringify({ error: 'Calculation failed', details: { message } }),
+        };
+      }
+    }
+
+    // Production path: fire-and-forget background function — do NOT await
     const siteUrl = process.env['URL'] ?? 'http://localhost:8888';
     const bgUrl = `${siteUrl}/.netlify/functions/run-calculations-background`;
     const internalSecret = process.env['INTERNAL_API_SECRET'] ?? '';

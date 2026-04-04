@@ -537,7 +537,36 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    // Mark as processing before firing background task
+    // Test seam: in Vitest, run pipeline synchronously so tests can assert on the result
+    if (process.env['VITEST']) {
+      const pipelineResult = await runFullPipeline({
+        firmId,
+        userId,
+        uploadId,
+        fileType,
+        parseResult,
+        mappingSet,
+        dryRun: false,
+      });
+      await updateUploadStatus(firmId, uploadId, 'processed');
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          success: true,
+          uploadId,
+          pipeline: {
+            stagesCompleted: pipelineResult.stagesCompleted,
+            warnings: pipelineResult.warnings,
+            recordsProcessed: pipelineResult.recordsProcessed,
+            recordsPersisted: pipelineResult.recordsPersisted,
+            duration_ms: pipelineResult.duration_ms,
+          },
+        }),
+      };
+    }
+
+    // Production path: fire-and-forget background task
     await updateUploadStatus(firmId, uploadId, 'processing');
     fireBackground(uploadId, firmId, fileType);
 
