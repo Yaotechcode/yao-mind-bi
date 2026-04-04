@@ -137,6 +137,30 @@ export interface RawUploadChunkDocument {
   records: Record<string, unknown>[];
 }
 
+// risk_flags — generated after every pull by the risk scanning stage
+// Replaced wholesale on each pull: deleteMany then insertMany.
+export interface RiskFlagDocument {
+  _id?: ObjectId;
+  firm_id: string;
+  flagged_at: Date;
+  entity_type: string;
+  entity_id: string;
+  entity_name: string;
+  flag_type:
+    | 'WIP_AGE_HIGH'
+    | 'BUDGET_BURN_CRITICAL'
+    | 'DEBTOR_DAYS_HIGH'
+    | 'UTILISATION_DROP'
+    | 'DORMANT_MATTER'
+    | 'BAD_DEBT_RISK'
+    | 'WRITE_OFF_SPIKE';
+  severity: 'high' | 'medium' | 'low';
+  detail: string;
+  kpi_value: number;
+  threshold: number;
+  ai_summary?: string;
+}
+
 // cross_reference_registries — one document per firm, upserted on every pipeline run
 export interface CrossReferenceRegistryDocument {
   _id?: ObjectId;

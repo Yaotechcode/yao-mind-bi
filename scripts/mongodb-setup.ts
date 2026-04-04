@@ -213,6 +213,65 @@ async function setupCustomEntityRecords(db: Db): Promise<void> {
   console.log('  ✓ Indexes created');
 }
 
+async function setupRiskFlags(db: Db): Promise<void> {
+  console.log('\n[risk_flags]');
+  await createCollectionIfMissing(db, 'risk_flags');
+
+  await db.command({
+    collMod: 'risk_flags',
+    validator: {
+      $jsonSchema: {
+        bsonType: 'object',
+        required: [
+          'firm_id',
+          'flagged_at',
+          'entity_type',
+          'entity_id',
+          'entity_name',
+          'flag_type',
+          'severity',
+          'detail',
+          'kpi_value',
+          'threshold',
+        ],
+        properties: {
+          firm_id:     { bsonType: 'string' },
+          flagged_at:  { bsonType: 'date' },
+          entity_type: { bsonType: 'string' },
+          entity_id:   { bsonType: 'string' },
+          entity_name: { bsonType: 'string' },
+          flag_type:   {
+            bsonType: 'string',
+            enum: [
+              'WIP_AGE_HIGH',
+              'BUDGET_BURN_CRITICAL',
+              'DEBTOR_DAYS_HIGH',
+              'UTILISATION_DROP',
+              'DORMANT_MATTER',
+              'BAD_DEBT_RISK',
+              'WRITE_OFF_SPIKE',
+            ],
+          },
+          severity:    { bsonType: 'string', enum: ['high', 'medium', 'low'] },
+          detail:      { bsonType: 'string' },
+          kpi_value:   { bsonType: 'double' },
+          threshold:   { bsonType: 'double' },
+          ai_summary:  { bsonType: 'string' },
+        },
+      },
+    },
+    validationLevel: 'moderate',
+  });
+
+  const col = db.collection('risk_flags');
+
+  await col.createIndex({ firm_id: 1, flagged_at: -1 },                    { background: true });
+  await col.createIndex({ firm_id: 1, flag_type: 1, severity: 1 },         { background: true });
+  await col.createIndex({ firm_id: 1, entity_type: 1, entity_id: 1 },      { background: true });
+
+  console.log('  ✓ Indexes created');
+}
+
 // =============================================================================
 // Entry point
 // =============================================================================
@@ -232,6 +291,7 @@ async function main(): Promise<void> {
     await setupCalculatedKpis(db);
     await setupHistoricalSnapshots(db);
     await setupCustomEntityRecords(db);
+    await setupRiskFlags(db);
 
     console.log('\n✅ MongoDB setup complete.\n');
   } finally {

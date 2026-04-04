@@ -9,6 +9,7 @@ import type {
   CrossReferenceRegistryDocument,
   NormalisedDatasetDocument,
   RecalculationFlagDocument,
+  RiskFlagDocument,
 } from '@shared/types/mongodb.js';
 import type {
   CrossReferenceRegistrySerialised,
@@ -676,6 +677,67 @@ export async function setCalculationError(firmId: string, error: string): Promis
       last_error_at: new Date(),
     },
     { upsert: true }
+  );
+}
+
+// ---------------------------------------------------------------------------
+// risk_flags
+// ---------------------------------------------------------------------------
+
+const SEVERITY_ORDER: Record<RiskFlagDocument['severity'], number> = {
+  high: 0,
+  medium: 1,
+  low: 2,
+};
+
+/**
+ * Replace all risk flags for a firm with a fresh set.
+ * Deletes existing flags first, then inserts the new batch.
+ * A pull with zero flags results in an empty collection for that firm.
+ */
+export async function storeRiskFlags(
+  firmId: string,
+  flags: RiskFlagDocument[],
+): Promise<void> {
+  const col = await getCollection<RiskFlagDocument>('risk_flags');
+  await col.deleteMany({ firm_id: firmId });
+  if (flags.length > 0) {
+    const docs = flags.map((f) => ({ ...f, firm_id: firmId }));
+    await col.insertMany(docs as Parameters<typeof col.insertMany>[0]);
+  }
+}
+
+/**
+ * Return risk flags for a firm, sorted by severity (high first) then flagged_at DESC.
+ * All filter parameters are optional.
+ */
+export async function getRiskFlags(
+  firmId: string,
+  options?: {
+    severity?: RiskFlagDocument['severity'];
+    entity_type?: string;
+    flag_type?: RiskFlagDocument['flag_type'];
+    limit?: number;
+  },
+): Promise<RiskFlagDocument[]> {
+  const col = await getCollection<RiskFlagDocument>('risk_flags');
+
+  const filter: Record<string, unknown> = { firm_id: firmId };
+  if (options?.severity)    filter['severity']    = options.severity;
+  if (options?.entity_type) filter['entity_type'] = options.entity_type;
+  if (options?.flag_type)   filter['flag_type']   = options.flag_type;
+
+  const docs = await col
+    .find(filter)
+    .sort({ flagged_at: -1 })
+    .limit(options?.limit ?? 0)
+    .toArray();
+
+  // Sort by severity (high → medium → low) then preserve flagged_at DESC within each bucket
+  return docs.sort(
+    (a, b) =>
+      SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
+      b.flagged_at.getTime() - a.flagged_at.getTime(),
   );
 }
 
