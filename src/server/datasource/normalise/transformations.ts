@@ -158,6 +158,9 @@ export function transformTimeEntry(raw: YaoTimeEntry): NormalisedTimeEntry {
     lawyerName: raw.assignee
       ? fullName(raw.assignee.name, raw.assignee.surname)
       : null,
+    lawyerDefaultRate: null,   // populated by resolution layer
+    lawyerStatus: null,        // populated by resolution layer
+    lawyerIntegrationId: null, // populated by resolution layer
     matterId: raw.matter._id,
     matterNumber: raw.matter.number,
     invoice: raw.invoice ?? null,

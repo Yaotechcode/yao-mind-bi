@@ -106,6 +106,12 @@ export interface NormalisedTimeEntry {
   status: string;
   lawyerId: string | null;
   lawyerName: string | null;
+  /** Populated by resolution layer from attorneyMap. */
+  lawyerDefaultRate: number | null;
+  /** Populated by resolution layer from attorneyMap. */
+  lawyerStatus: string | null;
+  /** Populated by resolution layer from attorneyMap. */
+  lawyerIntegrationId: string | null;
   matterId: string;
   matterNumber: number;
   invoice: string | null;
