@@ -21,7 +21,8 @@
     "verify:1b06": "tsx scripts/test-1b06.ts",
     "verify:1b07": "tsx scripts/test-1b07.ts",
     "verify:1b08": "tsx scripts/test-1b08.ts",
-    "verify:pipeline": "tsx scripts/test-parsers.ts && tsx scripts/test-1b02.ts && tsx scripts/test-1b03.ts && tsx scripts/test-1b03b.ts && tsx scripts/test-1b04.ts && tsx scripts/test-1b05.ts && tsx scripts/test-1b06.ts && tsx scripts/test-1b07.ts && tsx scripts/test-1b08.ts"
+    "verify:pipeline": "tsx scripts/test-parsers.ts && tsx scripts/test-1b02.ts && tsx scripts/test-1b03.ts && tsx scripts/test-1b03b.ts && tsx scripts/test-1b04.ts && tsx scripts/test-1b05.ts && tsx scripts/test-1b06.ts && tsx scripts/test-1b07.ts && tsx scripts/test-1b08.ts",
+    "test:pull": "tsx scripts/test-pull.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
