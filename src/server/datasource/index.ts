@@ -11,6 +11,8 @@ export type {
   YaoCaseType,
   YaoMatter,
   YaoTimeEntry,
+  YaoInvoice,
+  YaoInvoiceSummary,
   AttorneyMap,
   DepartmentMap,
   CaseTypeMap,

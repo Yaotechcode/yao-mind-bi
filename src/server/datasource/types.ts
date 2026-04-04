@@ -119,6 +119,57 @@ export interface YaoTimeEntry {
   updated_at: string;
 }
 
+export interface YaoInvoice {
+  _id: string;
+  invoice_number: number;
+  invoice_date: string;
+  due_date: string;
+  subtotal: number;
+  total_disbursements: number;
+  total_other_fees: number;
+  total_firm_fees: number;
+  write_off: number;
+  total: number;
+  outstanding: number;
+  paid: number;
+  credited: number;
+  written_off: number;
+  vat: number;
+  vat_percentage: number;
+  less_paid_on_account: number;
+  billable_entries: number;
+  time_entries_override_value: number;
+  status: string;
+  type: string;
+  clients: Array<{
+    _id: string;
+    display_name: string;
+    first_name?: string;
+    last_name?: string;
+  }>;
+  solicitor?: { _id: string; name: string };
+  matter?: { _id: string; number: number; case_name: string };
+  narrative?: string;
+  reference?: string;
+  integration_id?: string;
+  account_code?: string;
+  history?: Array<{
+    _id: string;
+    name?: string;
+    description: string;
+    created_at: string;
+    type: string;
+  }>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface YaoInvoiceSummary {
+  unpaid: number;
+  paid: number;
+  total: number;
+}
+
 // =============================================================================
 // Derived in-memory maps
 // =============================================================================

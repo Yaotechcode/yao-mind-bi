@@ -27,6 +27,8 @@ import type {
   YaoCaseType,
   YaoMatter,
   YaoTimeEntry,
+  YaoInvoice,
+  YaoInvoiceSummary,
   AttorneyMap,
   DepartmentMap,
   CaseTypeMap,
@@ -253,7 +255,9 @@ export class DataSourceAdapter {
    *
    * @param path      API path, e.g. '/time-entries/search'
    * @param body      Base request body (page/next will be merged in each iteration)
-   * @param resultKey Field in the response containing the records array
+   * @param resultKey Field in the response containing the records array.
+   *                  Pass '' (empty string) when the response itself is a root-level
+   *                  array rather than a wrapped object (e.g. POST /invoices/search).
    * @param pageKey   Pagination strategy: 'page' or 'next'
    * @param size      Page size; used as request `size` param and stop condition for page-mode
    */
@@ -266,14 +270,21 @@ export class DataSourceAdapter {
   ): Promise<T[]> {
     const all: T[] = [];
 
+    // Helper: extract the records array from a response.
+    // When resultKey is '' the response IS the array (root-level array response).
+    const extractRows = (response: unknown): T[] => {
+      if (resultKey === '') return (response as T[] | null) ?? [];
+      return ((response as Record<string, unknown>)[resultKey] ?? []) as T[];
+    };
+
     if (pageKey === 'page') {
       let page = 1;
       while (true) {
-        const response = await this.request<Record<string, unknown>>('POST', path, {
+        const response = await this.request<unknown>('POST', path, {
           body: { ...body, size, page },
         });
 
-        const rows = (response[resultKey] ?? []) as T[];
+        const rows = extractRows(response);
         all.push(...rows);
 
         if (rows.length < size) break;
@@ -286,14 +297,14 @@ export class DataSourceAdapter {
         const requestBody: Record<string, unknown> = { ...body, size };
         if (next !== undefined && next !== null) requestBody['next'] = next;
 
-        const response = await this.request<Record<string, unknown>>('POST', path, {
+        const response = await this.request<unknown>('POST', path, {
           body: requestBody,
         });
 
-        const rows = (response[resultKey] ?? []) as T[];
+        const rows = extractRows(response);
         all.push(...rows);
 
-        next = response['next'] ?? null;
+        next = (response as Record<string, unknown>)?.['next'] ?? null;
         if (!next) break;
       }
     }
@@ -413,6 +424,33 @@ export class DataSourceAdapter {
     return raw
       .map((e) => stripNestedSensitiveFields(e) as unknown as YaoTimeEntry)
       .filter((e) => e.status === 'ACTIVE');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Invoices
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetches all invoices via page-based pagination.
+   * POST /invoices/search returns a root-level array — resultKey is ''.
+   * All statuses are included (DRAFT, ISSUED, PAID, CREDITED, WRITTEN_OFF, CANCELED).
+   */
+  async fetchInvoices(): Promise<YaoInvoice[]> {
+    return this.paginatePost<YaoInvoice>(
+      '/invoices/search',
+      {},
+      '',       // root-level array response — no wrapper key
+      'page',
+      100,
+    );
+  }
+
+  /**
+   * Fetches the invoice summary totals for a firm (single call, no pagination).
+   * Returns { unpaid, paid, total }.
+   */
+  async fetchInvoiceSummary(): Promise<YaoInvoiceSummary> {
+    return this.request<YaoInvoiceSummary>('GET', '/invoices/summary');
   }
 
   // ---------------------------------------------------------------------------
