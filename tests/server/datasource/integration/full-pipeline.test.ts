@@ -365,11 +365,11 @@ function createMockFetch(opts: {
       const page = Number(parsed.searchParams.get('page') ?? '1');
       if (page === 1) {
         const rows = Array.from({ length: mattersPage1Count }, () => ({ ...RAW_MATTER }));
-        return jsonResponse({ rows, limit: 100 });
+        return jsonResponse({ rows, limit: 50 });
       }
       if (page === 2) {
         const rows = Array.from({ length: mattersPage2Count }, () => ({ ...RAW_MATTER, _id: `matter-p2-${Date.now()}` }));
-        return jsonResponse({ rows, limit: 100 });
+        return jsonResponse({ rows, limit: 50 });
       }
       return jsonResponse({ rows: [], limit: 100 });
     }
@@ -549,7 +549,7 @@ describe('Test 2: sensitive fields stripped from attorney records', () => {
 
 describe('Test 3: matters pagination stop condition', () => {
   it('stops after page 1 when page returns fewer than limit records', async () => {
-    // Page 1: 3 matters (< 100 limit) → stop immediately
+    // Page 1: 3 matters (< 50 limit) → stop immediately
     const mockFetch = createMockFetch({ mattersPage1Count: 3 });
     const adapter = await makeAuthenticatedAdapter(mockFetch);
 
@@ -565,13 +565,13 @@ describe('Test 3: matters pagination stop condition', () => {
   });
 
   it('fetches page 2 when page 1 returns exactly the limit', async () => {
-    // Page 1: 100 matters (== limit → continue); Page 2: 5 matters → stop
-    const mockFetch = createMockFetch({ mattersPage1Count: 100, mattersPage2Count: 5 });
+    // Page 1: 50 matters (== limit → continue); Page 2: 5 matters → stop
+    const mockFetch = createMockFetch({ mattersPage1Count: 50, mattersPage2Count: 5 });
     const adapter = await makeAuthenticatedAdapter(mockFetch);
 
     const matters = await adapter.fetchMatters();
 
-    expect(matters).toHaveLength(105);
+    expect(matters).toHaveLength(55);
 
     const mattersCalls = (mockFetch as ReturnType<typeof vi.fn>).mock.calls.filter(
       ([url]: [string]) => new URL(url).pathname === '/matters',
@@ -580,7 +580,7 @@ describe('Test 3: matters pagination stop condition', () => {
   });
 
   it('page 2 request carries correct page param', async () => {
-    const mockFetch = createMockFetch({ mattersPage1Count: 100, mattersPage2Count: 0 });
+    const mockFetch = createMockFetch({ mattersPage1Count: 50, mattersPage2Count: 0 });
     const adapter = await makeAuthenticatedAdapter(mockFetch);
 
     await adapter.fetchMatters();

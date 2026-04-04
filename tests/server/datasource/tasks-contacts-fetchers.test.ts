@@ -179,7 +179,7 @@ describe('fetchTasks()', () => {
 
     const [url] = mockFetch.mock.calls[1] as [string];
     expect(url).toContain('page=1');
-    expect(url).toContain('limit=100');
+    expect(url).toContain('limit=50');
   });
 });
 
@@ -215,7 +215,7 @@ describe('fetchContacts()', () => {
     const [url] = mockFetch.mock.calls[1] as [string];
     expect(url).toContain('ids_filter=');
     expect(url).toContain('page=1');
-    expect(url).toContain('limit=100');
+    expect(url).toContain('limit=50');
   });
 
   it('returns contacts with correct fields', async () => {
@@ -232,7 +232,7 @@ describe('fetchContacts()', () => {
 
   it('paginates correctly', async () => {
     const adapter = await authenticatedAdapter();
-    const fullPage = Array.from({ length: 100 }, (_, i) =>
+    const fullPage = Array.from({ length: 50 }, (_, i) =>
       makeContact({ _id: `c-${i}` }),
     );
     mockFetch
@@ -240,7 +240,7 @@ describe('fetchContacts()', () => {
       .mockResolvedValueOnce(makeResponse({ rows: [makeContact({ _id: 'c-last' })] }));
 
     const result = await adapter.fetchContacts();
-    expect(result).toHaveLength(101);
+    expect(result).toHaveLength(51);
   });
 });
 

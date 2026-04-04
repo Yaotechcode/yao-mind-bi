@@ -98,7 +98,7 @@ describe('fetchMatters()', () => {
   it('paginates until rows.length < limit', async () => {
     const adapter = await authenticatedAdapter();
 
-    const fullPage = Array.from({ length: 100 }, (_, i) =>
+    const fullPage = Array.from({ length: 50 }, (_, i) =>
       makeMatter({ _id: `m-${i}`, number: i }),
     );
     const lastPage = [makeMatter({ _id: 'm-last', number: 999 })];
@@ -108,7 +108,7 @@ describe('fetchMatters()', () => {
       .mockResolvedValueOnce(makeResponse({ rows: lastPage }));
 
     const result = await adapter.fetchMatters();
-    expect(result).toHaveLength(101);
+    expect(result).toHaveLength(51);
     expect(mockFetch).toHaveBeenCalledTimes(3); // 1 auth + 2 pages
   });
 
@@ -120,7 +120,7 @@ describe('fetchMatters()', () => {
 
     const [url] = mockFetch.mock.calls[1] as [string];
     expect(url).toContain('page=1');
-    expect(url).toContain('limit=100');
+    expect(url).toContain('limit=50');
   });
 
   it('handles law_firm as an object', async () => {

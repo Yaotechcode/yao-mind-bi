@@ -403,7 +403,7 @@ export class DataSourceAdapter {
       '/matters',
       {},
       'rows',
-      100,
+      50,
     );
     return raw.map((m) => stripNestedSensitiveFields(m)) as unknown as YaoMatter[];
   }
@@ -425,7 +425,7 @@ export class DataSourceAdapter {
       {},
       'result',
       'next',
-      100,
+      50,
     );
     return raw
       .map((e) => stripNestedSensitiveFields(e) as unknown as YaoTimeEntry)
@@ -447,7 +447,7 @@ export class DataSourceAdapter {
       {},
       '',       // root-level array response — no wrapper key
       'page',
-      100,
+      50,
     );
   }
 
@@ -473,7 +473,7 @@ export class DataSourceAdapter {
       { types: ['OFFICE_PAYMENT', 'CLIENT_TO_OFFICE', 'OFFICE_RECEIPT'] },
       '',       // root-level array response
       'page',
-      100,
+      50,
     );
   }
 
@@ -542,7 +542,7 @@ export class DataSourceAdapter {
       '/tasks',
       {},
       'rows',
-      100,
+      50,
     );
     return raw
       .map((t) => stripNestedSensitiveFields(t) as unknown as YaoTask)
@@ -561,7 +561,7 @@ export class DataSourceAdapter {
       '/contacts',
       { is_archived: 'false', ids_filter: '[]', tag: '', company: '' },
       'rows',
-      100,
+      50,
     );
   }
 

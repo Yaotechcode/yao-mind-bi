@@ -109,7 +109,7 @@ describe('fetchInvoices()', () => {
 
   it('paginates correctly — stops when result.length < size', async () => {
     const adapter = await authenticatedAdapter();
-    const fullPage = Array.from({ length: 100 }, () => makeInvoice());
+    const fullPage = Array.from({ length: 50 }, () => makeInvoice());
     const lastPage = [makeInvoice()];
 
     mockFetch
@@ -117,13 +117,13 @@ describe('fetchInvoices()', () => {
       .mockResolvedValueOnce(makeResponse(lastPage));
 
     const result = await adapter.fetchInvoices();
-    expect(result).toHaveLength(101);
+    expect(result).toHaveLength(51);
     expect(mockFetch).toHaveBeenCalledTimes(3); // 1 auth + 2 pages
   });
 
   it('increments page number in successive requests', async () => {
     const adapter = await authenticatedAdapter();
-    const fullPage = Array.from({ length: 100 }, () => makeInvoice());
+    const fullPage = Array.from({ length: 50 }, () => makeInvoice());
     mockFetch
       .mockResolvedValueOnce(makeResponse(fullPage))
       .mockResolvedValueOnce(makeResponse([]));
@@ -139,7 +139,7 @@ describe('fetchInvoices()', () => {
 
     expect(firstBody['page']).toBe(1);
     expect(secondBody['page']).toBe(2);
-    expect(firstBody['size']).toBe(100);
+    expect(firstBody['size']).toBe(50);
   });
 
   it('includes DRAFT invoices', async () => {

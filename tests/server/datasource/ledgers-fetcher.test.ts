@@ -90,7 +90,7 @@ describe('fetchLedgers()', () => {
 
   it('paginates — stops when result.length < size', async () => {
     const adapter = await authenticatedAdapter();
-    const fullPage = Array.from({ length: 100 }, () => makeLedger());
+    const fullPage = Array.from({ length: 50 }, () => makeLedger());
     const lastPage = [makeLedger()];
 
     mockFetch
@@ -98,7 +98,7 @@ describe('fetchLedgers()', () => {
       .mockResolvedValueOnce(makeResponse(lastPage));
 
     const result = await adapter.fetchLedgers();
-    expect(result).toHaveLength(101);
+    expect(result).toHaveLength(51);
     expect(mockFetch).toHaveBeenCalledTimes(3); // 1 auth + 2 pages
   });
 
@@ -111,13 +111,13 @@ describe('fetchLedgers()', () => {
     const [, init] = mockFetch.mock.calls[1] as [string, RequestInit];
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
     expect(body['types']).toEqual(['OFFICE_PAYMENT', 'CLIENT_TO_OFFICE', 'OFFICE_RECEIPT']);
-    expect(body['size']).toBe(100);
+    expect(body['size']).toBe(50);
     expect(body['page']).toBe(1);
   });
 
   it('increments page on subsequent requests', async () => {
     const adapter = await authenticatedAdapter();
-    const fullPage = Array.from({ length: 100 }, () => makeLedger());
+    const fullPage = Array.from({ length: 50 }, () => makeLedger());
     mockFetch
       .mockResolvedValueOnce(makeResponse(fullPage))
       .mockResolvedValueOnce(makeResponse([]));

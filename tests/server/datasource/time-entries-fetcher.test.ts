@@ -128,7 +128,7 @@ describe('fetchTimeEntries()', () => {
     const firstCall = mockFetch.mock.calls[1] as [string, RequestInit];
     const body = JSON.parse(firstCall[1].body as string) as Record<string, unknown>;
     expect(body).not.toHaveProperty('next');
-    expect(body['size']).toBe(100);
+    expect(body['size']).toBe(50);
   });
 
   it('excludes CONSOLIDATED entries', async () => {
