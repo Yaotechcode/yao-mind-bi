@@ -25,14 +25,35 @@ ALTER TABLE yao_api_credentials ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "yao_api_credentials_insert" ON yao_api_credentials
   FOR INSERT
   TO authenticated
-  WITH CHECK (firm_id = get_user_firm_id());
+  WITH CHECK (
+    firm_id = get_user_firm_id()
+    AND EXISTS (
+      SELECT 1 FROM users
+      WHERE id = auth.uid()
+      AND role IN ('owner', 'admin')
+    )
+  );
 
 -- Firm owner and admin can UPDATE their own firm's row.
 CREATE POLICY "yao_api_credentials_update" ON yao_api_credentials
   FOR UPDATE
   TO authenticated
-  USING (firm_id = get_user_firm_id())
-  WITH CHECK (firm_id = get_user_firm_id());
+  USING (
+    firm_id = get_user_firm_id()
+    AND EXISTS (
+      SELECT 1 FROM users
+      WHERE id = auth.uid()
+      AND role IN ('owner', 'admin')
+    )
+  )
+  WITH CHECK (
+    firm_id = get_user_firm_id()
+    AND EXISTS (
+      SELECT 1 FROM users
+      WHERE id = auth.uid()
+      AND role IN ('owner', 'admin')
+    )
+  );
 
 -- Firm owner and admin can SELECT their own firm's row.
 CREATE POLICY "yao_api_credentials_select" ON yao_api_credentials
