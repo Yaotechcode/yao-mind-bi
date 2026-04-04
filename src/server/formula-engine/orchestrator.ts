@@ -49,6 +49,8 @@ import {
   clearRecalculationFlag,
 } from '../lib/mongodb-operations.js';
 import { getFirmConfig, getFeeEarnerOverrides } from '../services/config-service.js';
+import { buildSnapshotsFromKpiResults } from '../datasource/enrich/kpi-snapshot-builder.js';
+import { writeKpiSnapshots } from '../services/kpi-snapshot-service.js';
 
 // =============================================================================
 // Public types
@@ -89,6 +91,8 @@ export interface OrchestratorDeps {
   clearStaleFlag?: (firmId: string) => Promise<void>;
   /** Optional injectable version manager (primarily for testing). */
   versionManager?: Pick<FormulaVersionManager, 'createFormulaVersionSnapshot'>;
+  /** Optional injectable kpi snapshot writer (primarily for testing). */
+  writeSnapshots?: (firmId: string, rows: import('../services/kpi-snapshot-service.js').KpiSnapshotRow[]) => Promise<void>;
 }
 
 // =============================================================================
@@ -138,6 +142,7 @@ export class CalculationOrchestrator {
       persistKpis: deps.persistKpis ?? storeCalculatedKpis,
       clearStaleFlag: deps.clearStaleFlag ?? clearRecalculationFlag,
       versionManager: deps.versionManager ?? new FormulaVersionManager(),
+      writeSnapshots: deps.writeSnapshots ?? writeKpiSnapshots,
     };
     // versionManager is stored in deps so tests can inject a mock without needing Supabase
     this.versionManager = this.deps.versionManager as FormulaVersionManager;
@@ -280,6 +285,22 @@ export class CalculationOrchestrator {
     };
 
     await this.deps.persistKpis(firmId, kpisPayload, configVersion, dataVersion);
+
+    // -------------------------------------------------------------------------
+    // 9b. Write kpi_snapshots to Supabase (fire after MongoDB persist)
+    // -------------------------------------------------------------------------
+    const pulledAt = new Date().toISOString();
+    const snapshotRows = buildSnapshotsFromKpiResults(
+      firmId,
+      pulledAt,
+      { kpis: kpisPayload as { formulaResults?: Record<string, FormulaResult>; ragAssignments?: Record<string, Record<string, RagAssignment>> } },
+    );
+    try {
+      await this.deps.writeSnapshots(firmId, snapshotRows);
+      console.info(`[orchestrator] Wrote ${snapshotRows.length} kpi_snapshot rows to Supabase`);
+    } catch (snapshotErr) {
+      console.error('[orchestrator] Failed to write kpi_snapshots to Supabase — calculation result still persisted to MongoDB', snapshotErr);
+    }
 
     // -------------------------------------------------------------------------
     // 10. Clear stale flag
