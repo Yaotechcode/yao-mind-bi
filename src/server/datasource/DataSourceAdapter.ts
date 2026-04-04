@@ -470,7 +470,7 @@ export class DataSourceAdapter {
   async fetchLedgers(): Promise<YaoLedger[]> {
     return this.paginatePost<YaoLedger>(
       '/ledgers/search',
-      { types: ['OFFICE_PAYMENT', 'CLIENT_TO_OFFICE', 'OFFICE_RECEIPT'] },
+      {},
       '',       // root-level array response
       'page',
       50,
