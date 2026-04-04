@@ -51,6 +51,8 @@ import {
 import { getFirmConfig, getFeeEarnerOverrides } from '../services/config-service.js';
 import { buildSnapshotsFromKpiResults } from '../datasource/enrich/kpi-snapshot-builder.js';
 import { writeKpiSnapshots } from '../services/kpi-snapshot-service.js';
+import { scanForRiskFlags } from '../datasource/enrich/risk-scanner.js';
+import { storeRiskFlags } from '../lib/mongodb-operations.js';
 
 // =============================================================================
 // Public types
@@ -93,6 +95,8 @@ export interface OrchestratorDeps {
   versionManager?: Pick<FormulaVersionManager, 'createFormulaVersionSnapshot'>;
   /** Optional injectable kpi snapshot writer (primarily for testing). */
   writeSnapshots?: (firmId: string, rows: import('../services/kpi-snapshot-service.js').KpiSnapshotRow[]) => Promise<void>;
+  /** Optional injectable risk flag writer (primarily for testing). */
+  writeRiskFlags?: (firmId: string, flags: import('../../shared/types/mongodb.js').RiskFlagDocument[]) => Promise<void>;
 }
 
 // =============================================================================
@@ -143,6 +147,7 @@ export class CalculationOrchestrator {
       clearStaleFlag: deps.clearStaleFlag ?? clearRecalculationFlag,
       versionManager: deps.versionManager ?? new FormulaVersionManager(),
       writeSnapshots: deps.writeSnapshots ?? writeKpiSnapshots,
+      writeRiskFlags: deps.writeRiskFlags ?? storeRiskFlags,
     };
     // versionManager is stored in deps so tests can inject a mock without needing Supabase
     this.versionManager = this.deps.versionManager as FormulaVersionManager;
@@ -300,6 +305,22 @@ export class CalculationOrchestrator {
       console.info(`[orchestrator] Wrote ${snapshotRows.length} kpi_snapshot rows to Supabase`);
     } catch (snapshotErr) {
       console.error('[orchestrator] Failed to write kpi_snapshots to Supabase — calculation result still persisted to MongoDB', snapshotErr);
+    }
+
+    // -------------------------------------------------------------------------
+    // 9c. Run risk scanner and persist risk_flags to MongoDB
+    // -------------------------------------------------------------------------
+    try {
+      const riskFlags = scanForRiskFlags({
+        firmId,
+        kpiSnapshots: snapshotRows,
+        config: firmConfig,
+        pulledAt,
+      });
+      await this.deps.writeRiskFlags(firmId, riskFlags);
+      console.info(`[orchestrator] Stored ${riskFlags.length} risk flags for firmId=${firmId}`);
+    } catch (riskErr) {
+      console.error('[orchestrator] Failed to store risk flags — calculation result still valid', riskErr);
     }
 
     // -------------------------------------------------------------------------
