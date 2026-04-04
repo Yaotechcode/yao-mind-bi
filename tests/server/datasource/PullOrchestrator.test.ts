@@ -115,6 +115,7 @@ function makeAdapter(overrides: Partial<ReturnType<typeof makeAdapter>> = {}) {
     fetchContacts:       vi.fn().mockResolvedValue([{ _id: 'con-1' }]),
     fetchInvoiceSummary: vi.fn().mockResolvedValue({ unpaid: 0, paid: 0, total: 0 }),
     routeLedgers:        vi.fn().mockReturnValue({ disbursements: [], invoicePayments: [], disbursementRecoveries: [] }),
+    getWarnings:         vi.fn().mockReturnValue([]),
   };
   return { ...base, ...overrides };
 }

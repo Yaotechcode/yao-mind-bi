@@ -99,10 +99,16 @@ export class DataSourceAdapter {
   private readonly firmId: string;
   private token: string | null = null;
   private readonly baseUrl: string;
+  private readonly _warnings: string[] = [];
 
   constructor(firmId: string) {
     this.firmId = firmId;
     this.baseUrl = requireEnv('YAO_API_BASE_URL');
+  }
+
+  /** Returns any non-fatal warnings accumulated during the pull (e.g. early pagination stop). */
+  getWarnings(): string[] {
+    return [...this._warnings];
   }
 
   // ---------------------------------------------------------------------------
@@ -223,24 +229,38 @@ export class DataSourceAdapter {
 
   /**
    * Paginated GET: increments `page` param, stops when result array < limit.
-   * @param path       API path, e.g. '/matters'
-   * @param params     Base query params (page will be added/overwritten each iteration)
-   * @param resultKey  Field in the response containing the records array
-   * @param limit      Page size; used both as the request `limit` param and stop condition
+   * @param path              API path, e.g. '/matters'
+   * @param params            Base query params (page will be added/overwritten each iteration)
+   * @param resultKey         Field in the response containing the records array
+   * @param limit             Page size; used both as the request `limit` param and stop condition
+   * @param stopOnServerError When true, a 5xx on any page logs a warning and stops pagination
+   *                          rather than throwing. Use for endpoints known to 500 on later pages.
    */
   async paginateGet<T>(
     path: string,
     params: Record<string, string>,
     resultKey: string,
     limit = 100,
+    stopOnServerError = false,
   ): Promise<T[]> {
     const all: T[] = [];
     let page = 1;
 
     while (true) {
-      const response = await this.request<Record<string, unknown>>('GET', path, {
-        params: { ...params, page: String(page), limit: String(limit) },
-      });
+      let response: Record<string, unknown>;
+      try {
+        response = await this.request<Record<string, unknown>>('GET', path, {
+          params: { ...params, page: String(page), limit: String(limit) },
+        });
+      } catch (err) {
+        if (stopOnServerError && err instanceof YaoApiError && err.statusCode >= 500) {
+          const msg = `${path} page ${page} returned ${err.statusCode} — stopping pagination early with ${all.length} records`;
+          console.warn(`[DataSourceAdapter] WARNING: ${msg}`);
+          this._warnings.push(msg);
+          break;
+        }
+        throw err;
+      }
 
       const rows = (response[resultKey] ?? []) as T[];
       all.push(...rows);
@@ -543,6 +563,7 @@ export class DataSourceAdapter {
       {},
       'rows',
       50,
+      true, // stopOnServerError: Yao API returns 500 on page 3
     );
     return raw
       .map((t) => stripNestedSensitiveFields(t) as unknown as YaoTask)

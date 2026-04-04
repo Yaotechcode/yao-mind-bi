@@ -99,6 +99,7 @@ export interface PullOrchestratorDeps {
     | 'fetchContacts'
     | 'fetchInvoiceSummary'
     | 'routeLedgers'
+    | 'getWarnings'
   >;
   /** Override the CalculationOrchestrator (for unit testing without MongoDB). */
   createCalcOrchestrator?: (firmId: string) => Pick<CalculationOrchestrator, 'calculateAll'>;
@@ -197,6 +198,9 @@ export class PullOrchestrator {
       stats.disbursements = ledgers.disbursements.length;
       stats.tasks         = rawTasks.length;
       stats.contacts      = rawContacts.length;
+
+      // Collect any non-fatal warnings from the adapter (e.g. early pagination stop)
+      warnings.push(...adapter.getWarnings());
 
       await updatePullStage(firmId, 'Fetching time entries, invoices, ledgers, tasks, contacts', {
         matters:     stats.matters,
