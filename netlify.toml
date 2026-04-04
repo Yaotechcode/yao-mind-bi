@@ -26,6 +26,9 @@
 # MONGODB_URI           — MongoDB Atlas connection string
 # MONGODB_DB_NAME       — MongoDB database name
 
+[functions.yao-pull-background]
+  timeout = 900   # 15 minutes max — Background Functions have no request timeout
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
