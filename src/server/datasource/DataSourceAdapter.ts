@@ -26,6 +26,7 @@ import type {
   YaoDepartment,
   YaoCaseType,
   YaoMatter,
+  YaoTimeEntry,
   AttorneyMap,
   DepartmentMap,
   CaseTypeMap,
@@ -388,6 +389,30 @@ export class DataSourceAdapter {
       100,
     );
     return raw.map((m) => stripNestedSensitiveFields(m)) as unknown as YaoMatter[];
+  }
+
+  // ---------------------------------------------------------------------------
+  // Time entries
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetches time entries via cursor pagination (POST /time-entries/search).
+   * Strips password and email_default_signature from assignee objects.
+   * Excludes CONSOLIDATED and CONSOLIDATION_TARGET records — only ACTIVE entries
+   * are relevant for KPI calculation. If a future firm config option requires
+   * including consolidated entries, add an options param here and pass it through.
+   */
+  async fetchTimeEntries(): Promise<YaoTimeEntry[]> {
+    const raw = await this.paginatePost<Record<string, unknown>>(
+      '/time-entries/search',
+      {},
+      'result',
+      'next',
+      100,
+    );
+    return raw
+      .map((e) => stripNestedSensitiveFields(e) as unknown as YaoTimeEntry)
+      .filter((e) => e.status === 'ACTIVE');
   }
 
   // ---------------------------------------------------------------------------

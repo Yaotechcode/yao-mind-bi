@@ -93,6 +93,32 @@ export interface YaoMatter {
   law_firm: { _id: string; name: string } | string;
 }
 
+export interface YaoTimeEntry {
+  _id: string;
+  description: string;
+  do_not_bill: boolean;
+  rate: number;
+  client_rate?: number;
+  units: number;
+  duration_minutes: number;
+  billable: number;
+  write_off: number;
+  status: 'ACTIVE' | 'CONSOLIDATED' | 'CONSOLIDATION_TARGET';
+  work_type?: string;
+  activity?: { _id: string; title: string; measure: string };
+  matter: { _id: string; number: number; case_name: string; law_firm: string };
+  assignee?: {
+    _id: string;
+    name: string;
+    surname: string;
+    // password and email_default_signature are stripped before returning
+  };
+  invoice?: string;
+  date: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // =============================================================================
 // Derived in-memory maps
 // =============================================================================

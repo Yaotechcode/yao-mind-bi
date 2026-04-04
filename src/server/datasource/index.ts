@@ -10,6 +10,7 @@ export type {
   YaoDepartment,
   YaoCaseType,
   YaoMatter,
+  YaoTimeEntry,
   AttorneyMap,
   DepartmentMap,
   CaseTypeMap,
