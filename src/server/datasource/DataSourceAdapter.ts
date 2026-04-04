@@ -29,6 +29,8 @@ import type {
   YaoTimeEntry,
   YaoInvoice,
   YaoInvoiceSummary,
+  YaoLedger,
+  RoutedLedgers,
   AttorneyMap,
   DepartmentMap,
   CaseTypeMap,
@@ -451,6 +453,76 @@ export class DataSourceAdapter {
    */
   async fetchInvoiceSummary(): Promise<YaoInvoiceSummary> {
     return this.request<YaoInvoiceSummary>('GET', '/invoices/summary');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Ledgers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetches OFFICE_PAYMENT, CLIENT_TO_OFFICE, and OFFICE_RECEIPT ledger records
+   * via page-based pagination. Response is a root-level array.
+   */
+  async fetchLedgers(): Promise<YaoLedger[]> {
+    return this.paginatePost<YaoLedger>(
+      '/ledgers/search',
+      { types: ['OFFICE_PAYMENT', 'CLIENT_TO_OFFICE', 'OFFICE_RECEIPT'] },
+      '',       // root-level array response
+      'page',
+      100,
+    );
+  }
+
+  /**
+   * Routes ledger records into three destination buckets.
+   * Pure function — no async, no side effects.
+   *
+   * Routing rules:
+   *   OFFICE_PAYMENT                                   → disbursements
+   *   CLIENT_TO_OFFICE | OFFICE_RECEIPT:
+   *     invoice populated, disbursements empty         → invoicePayments
+   *     disbursements[] populated, invoice empty       → disbursementRecoveries
+   *     BOTH invoice AND disbursements[] populated     → BOTH lists (same record)
+   *     NEITHER                                        → discarded (logged)
+   */
+  routeLedgers(ledgers: YaoLedger[]): RoutedLedgers {
+    const result: RoutedLedgers = {
+      disbursements: [],
+      invoicePayments: [],
+      disbursementRecoveries: [],
+    };
+
+    let discarded = 0;
+
+    for (const ledger of ledgers) {
+      if (ledger.type === 'OFFICE_PAYMENT') {
+        result.disbursements.push(ledger);
+        continue;
+      }
+
+      if (ledger.type === 'CLIENT_TO_OFFICE' || ledger.type === 'OFFICE_RECEIPT') {
+        const hasInvoice = !!ledger.invoice;
+        const hasDisbursements = Array.isArray(ledger.disbursements) && ledger.disbursements.length > 0;
+
+        if (!hasInvoice && !hasDisbursements) {
+          discarded++;
+          continue;
+        }
+
+        if (hasInvoice) result.invoicePayments.push(ledger);
+        if (hasDisbursements) result.disbursementRecoveries.push(ledger);
+        continue;
+      }
+
+      // Any type outside the three fetched types — should not occur, but discard safely
+      discarded++;
+    }
+
+    if (discarded > 0) {
+      console.log(`[DataSourceAdapter] routeLedgers: discarded ${discarded} unroutable ledger record(s)`);
+    }
+
+    return result;
   }
 
   // ---------------------------------------------------------------------------

@@ -13,6 +13,8 @@ export type {
   YaoTimeEntry,
   YaoInvoice,
   YaoInvoiceSummary,
+  YaoLedger,
+  RoutedLedgers,
   AttorneyMap,
   DepartmentMap,
   CaseTypeMap,

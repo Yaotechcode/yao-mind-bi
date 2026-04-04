@@ -170,6 +170,46 @@ export interface YaoInvoiceSummary {
   total: number;
 }
 
+export interface YaoLedger {
+  _id: string;
+  type: string;
+  value: number;
+  vat: number;
+  vat_percentage: number;
+  subtotal: number;
+  outstanding: number;
+  paid: number;
+  status: string;
+  notes?: string;
+  reference?: string;
+  payee?: string;
+  tax_treatment?: string;
+  supplier_vat?: number;
+  date: string;
+  law_firm: string;
+  author?: { _id: string; name: string };
+  bank_account?: { _id: string; name: string; account_number?: string };
+  account_type?: string;
+  matter?: { _id: string; number: number; case_name: string };
+  /** Invoice _id as a string reference */
+  invoice?: string;
+  transfer_id?: string;
+  disbursements?: Array<{ _id: string; value: number }>;
+  integration_id?: string;
+  account_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RoutedLedgers {
+  /** OFFICE_PAYMENT records — source of disbursement entities */
+  disbursements: YaoLedger[];
+  /** CLIENT_TO_OFFICE or OFFICE_RECEIPT with invoice populated — used to derive datePaid */
+  invoicePayments: YaoLedger[];
+  /** CLIENT_TO_OFFICE or OFFICE_RECEIPT with disbursements[] populated */
+  disbursementRecoveries: YaoLedger[];
+}
+
 // =============================================================================
 // Derived in-memory maps
 // =============================================================================
