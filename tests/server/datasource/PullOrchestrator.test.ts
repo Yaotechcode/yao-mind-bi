@@ -100,10 +100,12 @@ function makeAdapter(overrides: Partial<ReturnType<typeof makeAdapter>> = {}) {
   const base = {
     authenticate:       vi.fn().mockResolvedValue(undefined),
     fetchLookupTables:  vi.fn().mockResolvedValue({
-      attorneys:   [{ _id: 'att-1' }],
-      departments: [{ _id: 'dept-1' }],
-      caseTypes:   [{ _id: 'ct-1' }],
-      maps:        { attorneyMap: {}, departmentMap: {}, caseTypeMap: {} },
+      attorneys:    [{ _id: 'att-1' }],
+      departments:  [{ _id: 'dept-1' }],
+      caseTypes:    [{ _id: 'ct-1' }],
+      attorneyMap:  {},
+      departmentMap: {},
+      caseTypeMap:   {},
     }),
     fetchMatters:        vi.fn().mockResolvedValue([{ _id: 'm-1' }, { _id: 'm-2' }]),
     fetchTimeEntries:    vi.fn().mockResolvedValue([{ _id: 'te-1' }]),

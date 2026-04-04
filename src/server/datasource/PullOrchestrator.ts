@@ -164,7 +164,8 @@ export class PullOrchestrator {
       // Step 4: Fetch lookup tables
       // -----------------------------------------------------------------------
       await updatePullStage(firmId, 'Fetching lookup tables');
-      const { attorneys, departments, caseTypes, maps } = await adapter.fetchLookupTables();
+      const { attorneys, departments, caseTypes, attorneyMap, caseTypeMap, departmentMap } = await adapter.fetchLookupTables();
+      const maps = { attorneyMap, caseTypeMap, departmentMap };
       stats.attorneys = attorneys.length;
 
       // -----------------------------------------------------------------------
