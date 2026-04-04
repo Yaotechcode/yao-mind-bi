@@ -21,6 +21,15 @@ import {
   YaoApiError,
   YaoRateLimitError,
 } from './errors.js';
+import type {
+  YaoAttorney,
+  YaoDepartment,
+  YaoCaseType,
+  AttorneyMap,
+  DepartmentMap,
+  CaseTypeMap,
+  LookupTables,
+} from './types.js';
 
 // =============================================================================
 // Helpers
@@ -266,5 +275,111 @@ export class DataSourceAdapter {
     }
 
     return all;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lookup table fetchers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetches all attorneys (active, pending, and disabled — needed for historical data).
+   * Strips password and email_default_signature from every record before returning.
+   */
+  async fetchAttorneys(): Promise<YaoAttorney[]> {
+    const raw = await this.request<Record<string, unknown>[]>('GET', '/attorneys');
+    return raw.map((a) => {
+      const { password: _p, email_default_signature: _e, ...safe } = a as Record<string, unknown>;
+      return safe as unknown as YaoAttorney;
+    });
+  }
+
+  /**
+   * Fetches all departments. Includes deleted ones — callers filter by is_deleted.
+   */
+  async fetchDepartments(): Promise<YaoDepartment[]> {
+    return this.request<YaoDepartment[]>('GET', '/departments');
+  }
+
+  /**
+   * Fetches active case types.
+   */
+  async fetchCaseTypes(): Promise<YaoCaseType[]> {
+    return this.request<YaoCaseType[]>('GET', '/case-types/active');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Map builders (pure — no network calls)
+  // ---------------------------------------------------------------------------
+
+  buildAttorneyMap(attorneys: YaoAttorney[]): AttorneyMap {
+    const map: AttorneyMap = {};
+    for (const a of attorneys) {
+      map[a._id] = {
+        fullName: `${a.name} ${a.surname}`,
+        firstName: a.name,
+        lastName: a.surname,
+        email: a.email,
+        status: a.status,
+        defaultRate: a.rates?.find((r) => r.default)?.value ?? null,
+        allRates: a.rates ?? [],
+        integrationAccountId: a.integration_account_id ?? null,
+        integrationAccountCode: a.integration_account_code ?? null,
+        jobTitle: a.job_title ?? null,
+      };
+    }
+    return map;
+  }
+
+  buildDepartmentMap(departments: YaoDepartment[]): DepartmentMap {
+    const map: DepartmentMap = {};
+    for (const d of departments) {
+      if (!d.is_deleted) map[d._id] = d.title;
+    }
+    return map;
+  }
+
+  buildCaseTypeMap(caseTypes: YaoCaseType[]): CaseTypeMap {
+    const map: CaseTypeMap = {};
+    for (const ct of caseTypes) {
+      map[ct._id] = {
+        title: ct.title,
+        departmentId: ct.department._id,
+        departmentTitle: ct.department.title,
+        isFixedFee: (ct.fixed_fee ?? 0) > 0,
+        fixedFeeValue: ct.fixed_fee ?? null,
+      };
+    }
+    return map;
+  }
+
+  // ---------------------------------------------------------------------------
+  // fetchLookupTables — orchestrates all three in parallel
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetches attorneys, departments, and case types in parallel and builds
+   * all three in-memory maps. Call this at the start of every pull, before
+   * fetching transactional data.
+   */
+  async fetchLookupTables(): Promise<LookupTables> {
+    const [attorneys, departments, caseTypes] = await Promise.all([
+      this.fetchAttorneys(),
+      this.fetchDepartments(),
+      this.fetchCaseTypes(),
+    ]);
+
+    console.log(
+      `[DataSourceAdapter] Lookup tables fetched — attorneys: ${attorneys.length}, ` +
+        `departments: ${departments.length}, caseTypes: ${caseTypes.length}`,
+    );
+
+    return {
+      attorneys,
+      departments,
+      caseTypes,
+      attorneyMap: this.buildAttorneyMap(attorneys),
+      departmentMap: this.buildDepartmentMap(departments),
+      caseTypeMap: this.buildCaseTypeMap(caseTypes),
+    };
   }
 }

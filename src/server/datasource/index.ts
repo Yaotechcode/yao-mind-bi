@@ -5,3 +5,12 @@ export {
   YaoApiError,
   YaoRateLimitError,
 } from './errors.js';
+export type {
+  YaoAttorney,
+  YaoDepartment,
+  YaoCaseType,
+  AttorneyMap,
+  DepartmentMap,
+  CaseTypeMap,
+  LookupTables,
+} from './types.js';
