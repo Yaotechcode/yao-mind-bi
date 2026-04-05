@@ -450,17 +450,6 @@ describe('non-fatal warnings', () => {
     expect(result.warnings.some((w) => w.toLowerCase().includes('fee earner'))).toBe(true);
   });
 
-  it('adds warning when writeKpiSnapshots fails, pull still succeeds', async () => {
-    const { writeKpiSnapshots } = await import('../../../src/server/services/kpi-snapshot-service.js');
-    vi.mocked(writeKpiSnapshots).mockRejectedValue(new Error('Supabase unavailable'));
-
-    const { orchestrator } = makeOrchestrator();
-    const result = await orchestrator.run();
-
-    expect(result.success).toBe(true);
-    expect(result.warnings.some((w) => w.includes('kpi_snapshots'))).toBe(true);
-  });
-
   it('adds warning when storeRiskFlags fails, pull still succeeds', async () => {
     const { storeRiskFlags } = await import('../../../src/server/lib/mongodb-operations.js');
     vi.mocked(storeRiskFlags).mockRejectedValue(new Error('MongoDB timeout'));

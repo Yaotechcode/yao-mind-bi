@@ -51,7 +51,6 @@ import { mergeAllFeeEarners } from './enrich/fee-earner-merger.js';
 import { buildClientProfiles } from './enrich/client-profile-builder.js';
 import { buildSnapshotsFromKpiResults } from './enrich/kpi-snapshot-builder.js';
 import { CalculationOrchestrator } from '../formula-engine/orchestrator.js';
-import { writeKpiSnapshots } from '../services/kpi-snapshot-service.js';
 import { scanForRiskFlags } from './enrich/risk-scanner.js';
 import {
   storeEnrichedEntities,
@@ -346,7 +345,10 @@ export class PullOrchestrator {
       const kpiResult = await calcOrchestrator.calculateAll(firmId);
 
       // -----------------------------------------------------------------------
-      // Step 11: Write kpi_snapshots
+      // Step 11: kpi_snapshots — already written by CalculationOrchestrator
+      // (step 9b inside calculateAll). Do NOT call writeKpiSnapshots again here:
+      // a second call with an empty array would DELETE the rows just written.
+      // Build snapshotRows only for the risk flag scan below.
       // -----------------------------------------------------------------------
       await updatePullStage(firmId, 'Writing snapshots');
       const snapshotRows = buildSnapshotsFromKpiResults(
@@ -354,14 +356,7 @@ export class PullOrchestrator {
         pulledAt,
         { kpis: kpiResult as unknown as Record<string, unknown> },
       );
-
-      try {
-        await writeKpiSnapshots(firmId, snapshotRows);
-        stats.kpiSnapshotsWritten = snapshotRows.length;
-      } catch (snapErr) {
-        const msg = snapErr instanceof Error ? snapErr.message : String(snapErr);
-        warnings.push(`kpi_snapshots write failed (non-fatal): ${msg}`);
-      }
+      stats.kpiSnapshotsWritten = snapshotRows.length;
 
       // -----------------------------------------------------------------------
       // Step 12: Scan + store risk flags
