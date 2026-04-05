@@ -57,6 +57,16 @@ export function buildSnapshotsFromKpiResults(
   const formulaResults = kpiResults.kpis['formulaResults'] ?? {};
   const ragAssignments = kpiResults.kpis['ragAssignments'] ?? {};
 
+  console.log('[kpi-snapshot-builder] Input keys:', Object.keys(kpiResults.kpis ?? {}));
+  console.log('[kpi-snapshot-builder] formulaResults sample:',
+    JSON.stringify(Object.entries(formulaResults).slice(0, 3).map(([id, r]) => ({
+      formulaId: id,
+      entityCount: Object.keys(r.entityResults ?? {}).length,
+      sampleEntityId: Object.keys(r.entityResults ?? {})[0],
+      sampleEntityName: Object.values(r.entityResults ?? {})[0]?.entityName,
+    })), null, 2));
+
+
   const entityTypeMap = buildEntityTypeMap();
   const rows: KpiSnapshotRow[] = [];
 

@@ -389,17 +389,53 @@ export class CalculationOrchestrator {
     clients: AggregatedClient[];
     firm: AggregatedFirm;
   }> {
-    const [kpisDoc, timeEntryDoc, invoiceDoc, disbursementDoc] = await Promise.all([
+    const [kpisDoc, timeEntryDoc, invoiceDoc, disbursementDoc, feeEarnerDoc] = await Promise.all([
       this.deps.getKpis(firmId),
       this.deps.getEnrichedEntities(firmId, 'timeEntry'),
       this.deps.getEnrichedEntities(firmId, 'invoice'),
       this.deps.getEnrichedEntities(firmId, 'disbursement'),
+      this.deps.getEnrichedEntities(firmId, 'feeEarner'),
     ]);
 
     const aggregate = kpisDoc?.kpis?.['aggregate'] as Record<string, unknown> | undefined;
 
+    // Fee earners from the legacy pipeline aggregate (preferred) or from the
+    // API pull's enriched entity store (fallback). The enriched entities use
+    // NormalisedAttorney field names (_id, fullName) — map them to the
+    // AggregatedFeeEarner shape expected by the formula engine.
+    let feeEarners = (aggregate?.feeEarners ?? []) as AggregatedFeeEarner[];
+    if (feeEarners.length === 0 && (feeEarnerDoc?.records?.length ?? 0) > 0) {
+      feeEarners = (feeEarnerDoc!.records as unknown as Record<string, unknown>[]).map((r) => ({
+        // Identity — formula engine uses lawyerId / lawyerName for grouping
+        lawyerId: (r['_id'] as string | undefined),
+        lawyerName: (r['fullName'] as string | undefined),
+        // WIP aggregates not available in NormalisedAttorney; formulas that need
+        // them will read from time entries directly (e.g. F-TU-01).
+        wipTotalHours: 0,
+        wipChargeableHours: 0,
+        wipNonChargeableHours: 0,
+        wipChargeableValue: 0,
+        wipTotalValue: 0,
+        wipWriteOffValue: 0,
+        wipMatterCount: 0,
+        wipOrphanedHours: 0,
+        wipOrphanedValue: 0,
+        wipOldestEntryDate: null,
+        wipNewestEntryDate: null,
+        wipEntryCount: 0,
+        recordingGapDays: null,
+        invoicedRevenue: 0,
+        invoicedOutstanding: 0,
+        invoicedCount: 0,
+        // Pass through all extra fields (payModel, rate, grade, status, etc.)
+        // so that formulas using dynamic field access can read them.
+        ...r,
+      } as AggregatedFeeEarner));
+      console.log(`[orchestrator] loadEnrichedData: no aggregate feeEarners — fell back to ${feeEarners.length} enriched entities`);
+    }
+
     return {
-      feeEarners: (aggregate?.feeEarners ?? []) as AggregatedFeeEarner[],
+      feeEarners,
       matters: (aggregate?.matters ?? []) as AggregatedMatter[],
       clients: (aggregate?.clients ?? []) as AggregatedClient[],
       departments: (aggregate?.departments ?? []) as AggregatedDepartment[],

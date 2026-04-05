@@ -196,7 +196,7 @@ const BUILT_IN_FORMULAS: BuiltInFormulaDefinition[] = [
       'Expressed as a percentage; compared against firm and per-grade RAG thresholds.',
     category: 'revenue',
     formulaType: 'built_in',
-    entityType: EntityType.FEE_EARNER,
+    entityType: EntityType.MATTER,
     resultType: 'percentage',
     definition: {
       approach:

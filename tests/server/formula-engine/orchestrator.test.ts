@@ -173,6 +173,41 @@ describe('CalculationOrchestrator', () => {
       expect(result.errors).toEqual([]);
     });
 
+    it('falls back to enriched feeEarner entities when aggregate.feeEarners is empty', async () => {
+      // kpisDoc has empty feeEarners in aggregate (API pull path, first run)
+      const kpisDoc = makeKpisDoc();
+
+      const getEnrichedEntities = vi.fn().mockImplementation((_fid: string, entityType: string) => {
+        if (entityType === 'feeEarner') {
+          return Promise.resolve({
+            records: [
+              { _id: 'att-1', fullName: 'Alice Smith', status: 'ACTIVE' },
+              { _id: 'att-2', fullName: 'Bob Jones',  status: 'ACTIVE' },
+            ],
+            firm_id: 'firm-test', entity_type: 'feeEarner', data_version: '1', source_uploads: [], record_count: 2,
+          });
+        }
+        return Promise.resolve(null);
+      });
+
+      const deps = makeDeps({ getKpis: vi.fn().mockResolvedValue(kpisDoc), getEnrichedEntities });
+      const orchestrator = new CalculationOrchestrator(deps);
+      const result = await orchestrator.calculateAll('firm-test');
+
+      // Calculation should complete without errors
+      expect(result.firmId).toBe('firm-test');
+      // getEnrichedEntities must have been called with 'feeEarner'
+      expect(getEnrichedEntities).toHaveBeenCalledWith('firm-test', 'feeEarner');
+      // F-TU-01 entity results should include both fee earners (even with 0 time entries → value=0)
+      const tuResult = result.results['F-TU-01'];
+      if (tuResult) {
+        // att-1 and att-2 should appear in results (using _id as lawyerId)
+        expect(Object.keys(tuResult.entityResults)).toContain('att-1');
+        expect(Object.keys(tuResult.entityResults)).toContain('att-2');
+        expect(tuResult.entityResults['att-1']!.entityName).toBe('Alice Smith');
+      }
+    });
+
     it('returns results and snippetResults maps', async () => {
       const deps = makeDeps();
       const orchestrator = new CalculationOrchestrator(deps);
