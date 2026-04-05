@@ -113,6 +113,7 @@ export class DataSourceAdapter {
   private token: string | null = null;
   private readonly baseUrl: string;
   private readonly _warnings: string[] = [];
+  private readonly REQUEST_TIMEOUT_MS = 30_000;
 
   constructor(firmId: string) {
     this.firmId = firmId;
@@ -122,6 +123,35 @@ export class DataSourceAdapter {
   /** Returns any non-fatal warnings accumulated during the pull (e.g. early pagination stop). */
   getWarnings(): string[] {
     return [...this._warnings];
+  }
+
+  // ---------------------------------------------------------------------------
+  // Timeout-aware fetch + helpers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Wraps the global fetch with an AbortController timeout.
+   * Throws a plain Error with "Request timed out after Xs: <url>" on timeout
+   * so callers can distinguish it from other network errors.
+   */
+  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.REQUEST_TIMEOUT_MS);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new Error(`Request timed out after ${this.REQUEST_TIMEOUT_MS / 1000}s: ${url}`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /** Returns true when err is a timeout thrown by fetchWithTimeout. */
+  private static isTimeoutError(err: unknown): boolean {
+    return err instanceof Error && err.message.startsWith('Request timed out after');
   }
 
   // ---------------------------------------------------------------------------
@@ -137,7 +167,7 @@ export class DataSourceAdapter {
   async authenticate(): Promise<void> {
     const { email, password, code } = await getCredentials(this.firmId);
 
-    const response = await fetch(`${this.baseUrl}/attorneys/login`, {
+    const response = await this.fetchWithTimeout(`${this.baseUrl}/attorneys/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password, code }),
@@ -197,14 +227,15 @@ export class DataSourceAdapter {
       init.body = JSON.stringify(options.body);
     }
 
-    const execute = () => fetch(url.toString(), init);
+    const urlString = url.toString();
+    const executeWithTimeout = () => this.fetchWithTimeout(urlString, init);
 
-    let response = await execute();
+    let response = await executeWithTimeout();
 
     // 429 — wait and retry once
     if (response.status === 429) {
       await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_WAIT_MS));
-      response = await execute();
+      response = await executeWithTimeout();
       if (response.status === 429) {
         throw new YaoRateLimitError(path);
       }
@@ -380,8 +411,10 @@ export class DataSourceAdapter {
       });
       firstRows = (response[resultKey] ?? []) as T[];
     } catch (err) {
-      if (stopOnServerError && err instanceof YaoApiError && (err as YaoApiError).statusCode >= 500) {
-        const msg = `${path} page 1 returned ${(err as YaoApiError).statusCode} — stopping pagination early with 0 records`;
+      const isTimeout = DataSourceAdapter.isTimeoutError(err);
+      if (isTimeout || (stopOnServerError && err instanceof YaoApiError && (err as YaoApiError).statusCode >= 500)) {
+        const reason = isTimeout ? 'timed out' : `returned ${(err as YaoApiError).statusCode}`;
+        const msg = `${path} page 1 ${reason} — stopping pagination early with 0 records`;
         console.warn(`[DataSourceAdapter] WARNING: ${msg}`);
         this._warnings.push(msg);
         return [];
@@ -404,8 +437,10 @@ export class DataSourceAdapter {
             });
             return (response[resultKey] ?? []) as T[];
           } catch (err) {
-            if (stopOnServerError && err instanceof YaoApiError && (err as YaoApiError).statusCode >= 500) {
-              const msg = `${path} page ${p} returned ${(err as YaoApiError).statusCode} — stopping pagination early`;
+            const isTimeout = DataSourceAdapter.isTimeoutError(err);
+            if (isTimeout || (stopOnServerError && err instanceof YaoApiError && (err as YaoApiError).statusCode >= 500)) {
+              const reason = isTimeout ? 'timed out' : `returned ${(err as YaoApiError).statusCode}`;
+              const msg = `${path} page ${p} ${reason} — stopping pagination early`;
               console.warn(`[DataSourceAdapter] WARNING: ${msg}`);
               this._warnings.push(msg);
               return null;
@@ -461,16 +496,27 @@ export class DataSourceAdapter {
       const pageNumbers = Array.from({ length: batchSize }, (_, i) => nextPage + i);
 
       const results = await Promise.all(
-        pageNumbers.map(async (p): Promise<T[]> => {
-          const response = await this.request<unknown>('POST', path, {
-            body: { ...body, size, page: p },
-          });
-          return extractRows(response);
+        pageNumbers.map(async (p): Promise<T[] | null> => {
+          try {
+            const response = await this.request<unknown>('POST', path, {
+              body: { ...body, size, page: p },
+            });
+            return extractRows(response);
+          } catch (err) {
+            if (DataSourceAdapter.isTimeoutError(err)) {
+              const msg = `${path} page ${p} timed out — stopping pagination early`;
+              console.warn(`[DataSourceAdapter] WARNING: ${msg}`);
+              this._warnings.push(msg);
+              return null;
+            }
+            throw err;
+          }
         }),
       );
 
       let done = false;
       for (const rows of results) {
+        if (rows === null) { done = true; break; }
         all.push(...rows);
         if (rows.length < size) { done = true; break; }
       }
@@ -696,15 +742,26 @@ export class DataSourceAdapter {
       while (true) {
         const pageNumbers = Array.from({ length: BATCH_SIZE }, (_, i) => nextPage + i);
         const results = await Promise.all(
-          pageNumbers.map(async (p): Promise<Record<string, unknown>[]> => {
-            const res = await this.request<unknown>('POST', '/ledgers/search', {
-              body: { ...requestBody, size: LIMIT, page: p },
-            });
-            return extractRows(res);
+          pageNumbers.map(async (p): Promise<Record<string, unknown>[] | null> => {
+            try {
+              const res = await this.request<unknown>('POST', '/ledgers/search', {
+                body: { ...requestBody, size: LIMIT, page: p },
+              });
+              return extractRows(res);
+            } catch (err) {
+              if (DataSourceAdapter.isTimeoutError(err)) {
+                const msg = `/ledgers/search page ${p} timed out — stopping pagination early`;
+                console.warn(`[DataSourceAdapter] WARNING: ${msg}`);
+                this._warnings.push(msg);
+                return null;
+              }
+              throw err;
+            }
           }),
         );
         let done = false;
         for (const rawPage of results) {
+          if (rawPage === null) { done = true; break; }
           all.push(...filterPage(rawPage));
           if (rawPage.length < LIMIT) { done = true; break; }
         }
