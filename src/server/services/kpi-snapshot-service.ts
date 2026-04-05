@@ -58,19 +58,27 @@ export async function writeKpiSnapshots(
   firmId: string,
   snapshots: KpiSnapshotRow[],
 ): Promise<void> {
+  const supabaseUrl = process.env['SUPABASE_URL'] ?? 'NOT SET';
+  console.log(`[kpi-snapshot-service] Writing to Supabase: ${supabaseUrl}`);
+
   const db = getServerClient();
 
   // Step 1 — delete existing snapshot rows for this firm
-  const { error: deleteError } = await db
+  console.log(`[kpi-snapshot-service] Deleting existing rows for firm ${firmId}`);
+  const { error: deleteError, count: deleteCount } = await db
     .from('kpi_snapshots')
-    .delete()
+    .delete({ count: 'exact' })
     .eq('firm_id', firmId);
 
   if (deleteError) {
+    console.error(
+      `[kpi-snapshot-service] DELETE failed: ${deleteError.message} code=${deleteError.code}`,
+    );
     throw new Error(
       `writeKpiSnapshots: failed to delete existing rows for firm ${firmId}: ${deleteError.message}`,
     );
   }
+  console.log(`[kpi-snapshot-service] Deleted ${deleteCount ?? 0} existing rows`);
 
   if (snapshots.length === 0) {
     console.log(`[kpi-snapshot-service] Wrote 0 rows for firm ${firmId} (empty snapshot set)`);
@@ -84,16 +92,27 @@ export async function writeKpiSnapshots(
   }
 
   let insertedCount = 0;
-  for (const batch of batches) {
-    const { error: insertError } = await db.from('kpi_snapshots').insert(batch);
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+    const batch = batches[batchIndex]!;
+    const { error: insertError, count: insertCount } = await db
+      .from('kpi_snapshots')
+      .insert(batch, { count: 'exact' });
 
     if (insertError) {
+      console.error(
+        `[kpi-snapshot-service] INSERT failed: ${insertError.message}` +
+          ` code=${insertError.code} details=${insertError.details}`,
+      );
       // Best-effort rollback — remove partially inserted rows
       await db.from('kpi_snapshots').delete().eq('firm_id', firmId);
       throw new Error(
         `writeKpiSnapshots: batch insert failed for firm ${firmId} ` +
           `(after ${insertedCount} rows inserted): ${insertError.message}`,
       );
+    }
+
+    if (batchIndex === 0) {
+      console.log(`[kpi-snapshot-service] Batch 1 inserted ${insertCount ?? batch.length} rows`);
     }
 
     insertedCount += batch.length;
