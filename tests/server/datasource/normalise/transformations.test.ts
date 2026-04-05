@@ -32,6 +32,8 @@ const MAPS: LookupMaps = {
       status: 'ACTIVE', defaultRate: 250,
       allRates: [{ label: 'Standard', value: 250, default: true }],
       jobTitle: null,
+      email: null,
+      integrationAccountId: null,
     },
   },
   departmentMap: { 'dept-1': 'Conveyancing' },
@@ -152,12 +154,18 @@ describe('transformAttorney()', () => {
     expect(result.jobTitle).toBeNull();
   });
 
-  it('email, phone, integrationAccountId always null (not in keep list)', () => {
+  it('reads email and integrationAccountId from raw; phone and integrationAccountCode always null', () => {
     const result = transformAttorney(makeAttorney());
-    expect(result.email).toBe('');
+    expect(result.email).toBeNull();           // makeAttorney has no email field → null
     expect(result.phone).toBeNull();
-    expect(result.integrationAccountId).toBeNull();
+    expect(result.integrationAccountId).toBeNull(); // makeAttorney has no integration_account_id → null
     expect(result.integrationAccountCode).toBeNull();
+  });
+
+  it('maps email and integrationAccountId from raw when present', () => {
+    const result = transformAttorney(makeAttorney({ email: 'alice@example.com', integration_account_id: 'ACC-001' } as Partial<YaoAttorney>));
+    expect(result.email).toBe('alice@example.com');
+    expect(result.integrationAccountId).toBe('ACC-001');
   });
 
   it('does not include password or email_default_signature', () => {

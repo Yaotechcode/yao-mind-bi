@@ -59,9 +59,10 @@ export function transformAttorney(raw: YaoAttorney): NormalisedAttorney {
     fullName: fullName(raw.name, raw.surname),
     firstName: raw.name,
     lastName: raw.surname,
+    // email and integration_account_id are in ATTORNEY_KEEP_FIELDS — read from raw
+    email: raw.email ?? null,
+    integrationAccountId: raw.integration_account_id ?? null,
     // Fields not in ATTORNEY_KEEP_FIELDS — always null/default after pruning
-    email: '',
-    integrationAccountId: null,
     integrationAccountCode: null,
     phone: null,
     lawFirm: '',

@@ -34,7 +34,7 @@ export interface NormalisedAttorney {
   fullName: string;
   firstName: string;
   lastName: string;
-  email: string;
+  email: string | null;
   status: string;
   defaultRate: number | null;
   allRates: Array<{ label: string; value: number; default: boolean }>;
