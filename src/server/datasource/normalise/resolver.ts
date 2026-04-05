@@ -32,6 +32,7 @@ export interface ResolutionStats {
     total: number;
   };
   matters: {
+    // Enriched from map (field was null, resolver filled it)
     departmentName: number;
     caseTypeName: number;
     responsibleLawyerName: number;
@@ -39,10 +40,17 @@ export interface ResolutionStats {
     supervisorName: number;
     paralegalName: number;
     total: number;
+    // Already set by transformation (field was non-null, resolver skipped it)
+    alreadyHadDepartmentName: number;
+    alreadyHadCaseTypeName: number;
+    alreadyHadLawyerName: number;
   };
   invoices: {
+    // Enriched from map
     responsibleLawyerName: number;
     total: number;
+    // Already set by transformation
+    alreadyHadLawyerName: number;
   };
 }
 
@@ -98,25 +106,36 @@ export function resolveMatterEnrichment(
   let anyFilled = false;
 
   // Department name from map
-  if (matter.departmentName === null && matter.departmentId) {
-    const name = maps.departmentMap[matter.departmentId];
-    if (name) {
-      patch.departmentName = name;
-      if (stats) { stats.departmentName++; anyFilled = true; }
+  if (matter.departmentId) {
+    if (matter.departmentName !== null) {
+      if (stats) stats.alreadyHadDepartmentName++;
+    } else {
+      const name = maps.departmentMap[matter.departmentId];
+      if (name) {
+        patch.departmentName = name;
+        if (stats) { stats.departmentName++; anyFilled = true; }
+      }
     }
   }
 
   // Case type name from map
-  if (matter.caseTypeName === null && matter.caseTypeId) {
-    const ct = maps.caseTypeMap[matter.caseTypeId];
-    if (ct) {
-      patch.caseTypeName = ct.title;
-      if (stats) { stats.caseTypeName++; anyFilled = true; }
+  if (matter.caseTypeId) {
+    if (matter.caseTypeName !== null) {
+      if (stats) stats.alreadyHadCaseTypeName++;
+    } else {
+      const ct = maps.caseTypeMap[matter.caseTypeId];
+      if (ct) {
+        patch.caseTypeName = ct.title;
+        if (stats) { stats.caseTypeName++; anyFilled = true; }
+      }
     }
   }
 
   // Responsible lawyer — name + rate
   if (matter.responsibleLawyerId) {
+    if (matter.responsibleLawyerName !== null) {
+      if (stats) stats.alreadyHadLawyerName++;
+    }
     const atty = maps.attorneyMap[matter.responsibleLawyerId];
     if (atty) {
       if (matter.responsibleLawyerName === null) {
@@ -162,7 +181,12 @@ export function resolveInvoiceEnrichment(
   maps: LookupMaps,
   stats?: ResolutionStats['invoices'],
 ): NormalisedInvoice {
-  if (!invoice.responsibleLawyerId || invoice.responsibleLawyerName !== null) return invoice;
+  if (!invoice.responsibleLawyerId) return invoice;
+
+  if (invoice.responsibleLawyerName !== null) {
+    if (stats) stats.alreadyHadLawyerName++;
+    return invoice;
+  }
 
   const atty = maps.attorneyMap[invoice.responsibleLawyerId];
   if (!atty) return invoice;
@@ -196,8 +220,11 @@ export function resolveAll(data: ResolveAllInput, maps: LookupMaps): ResolveAllI
       responsibleLawyerName: 0, responsibleLawyerRate: 0,
       supervisorName: 0, paralegalName: 0,
       total: 0,
+      alreadyHadDepartmentName: 0,
+      alreadyHadCaseTypeName: 0,
+      alreadyHadLawyerName: 0,
     },
-    invoices: { responsibleLawyerName: 0, total: 0 },
+    invoices: { responsibleLawyerName: 0, total: 0, alreadyHadLawyerName: 0 },
   };
 
   const timeEntries = data.timeEntries.map((e) =>
@@ -214,10 +241,14 @@ export function resolveAll(data: ResolveAllInput, maps: LookupMaps): ResolveAllI
     '[resolver] Resolution complete —' +
       ` timeEntries: ${stats.timeEntries.total} enriched` +
       ` (rate: ${stats.timeEntries.lawyerRate}, status: ${stats.timeEntries.lawyerStatus})` +
-      ` | matters: ${stats.matters.total} enriched` +
+      ` | matters: ${stats.matters.total} enriched from map` +
       ` (deptName: ${stats.matters.departmentName}, caseTypeName: ${stats.matters.caseTypeName}` +
       `, lawyerName: ${stats.matters.responsibleLawyerName})` +
-      ` | invoices: ${stats.invoices.total} enriched`,
+      ` | matters already inline: deptName=${stats.matters.alreadyHadDepartmentName}` +
+      ` caseType=${stats.matters.alreadyHadCaseTypeName}` +
+      ` lawyerName=${stats.matters.alreadyHadLawyerName}` +
+      ` | invoices: ${stats.invoices.total} enriched from map` +
+      `, ${stats.invoices.alreadyHadLawyerName} already inline`,
   );
 
   return {
