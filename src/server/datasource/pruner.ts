@@ -22,6 +22,8 @@ export const ATTORNEY_KEEP_FIELDS = [
   '_id', 'name', 'surname', 'status',
   'job_title',
   'rates',
+  'email',                  // needed by fee-earner-merger for name+email matching
+  'integration_account_id', // needed by fee-earner-merger for Xero ID matching
 ];
 
 export const DEPARTMENT_KEEP_FIELDS = [

@@ -571,6 +571,8 @@ export class DataSourceAdapter {
         defaultRate: a.rates?.find((r) => r.default)?.value ?? null,
         allRates: a.rates ?? [],
         jobTitle: a.job_title ?? null,
+        email: a.email ?? null,
+        integrationAccountId: a.integration_account_id ?? null,
       };
     }
     return map;

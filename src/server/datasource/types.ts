@@ -18,6 +18,8 @@ export interface YaoAttorney {
   status: 'ACTIVE' | 'PENDING' | 'DISABLED';
   job_title?: string;
   rates: Array<{ label: string; value: number; default: boolean }>;
+  email?: string;
+  integration_account_id?: string;
 }
 
 export interface YaoDepartment {
@@ -194,6 +196,8 @@ export interface AttorneyMap {
     defaultRate: number | null;
     allRates: Array<{ label: string; value: number; default: boolean }>;
     jobTitle: string | null;
+    email: string | null;
+    integrationAccountId: string | null;
   };
 }
 
