@@ -155,11 +155,17 @@ export class PullOrchestrator {
 
     try {
       // -----------------------------------------------------------------------
-      // Step 3: Authenticate
+      // Step 3: Authenticate + load firm config
       // -----------------------------------------------------------------------
       await updatePullStage(firmId, 'Authenticating');
       const adapter = this.deps.createAdapter(firmId);
       await adapter.authenticate();
+
+      const firmConfig = await getFirmConfig(firmId);
+      const lookbackMonths = firmConfig?.dataPullLookbackMonths ?? 6;
+      const fromDateObj = new Date();
+      fromDateObj.setMonth(fromDateObj.getMonth() - lookbackMonths);
+      const dateFrom = fromDateObj.toISOString().split('T')[0];
 
       // -----------------------------------------------------------------------
       // Step 4: Fetch lookup tables
@@ -186,9 +192,9 @@ export class PullOrchestrator {
       );
       const [rawTimeEntries, rawInvoices, rawLedgersList, rawTasks, rawContacts] =
         await Promise.all([
-          adapter.fetchTimeEntries(),
-          adapter.fetchInvoices(),
-          adapter.fetchLedgers(),
+          adapter.fetchTimeEntries(dateFrom),
+          adapter.fetchInvoices(dateFrom),
+          adapter.fetchLedgers(dateFrom),
           adapter.fetchTasks(),
           adapter.fetchContacts(),
         ]);
@@ -289,7 +295,6 @@ export class PullOrchestrator {
       // Step 11: Write kpi_snapshots
       // -----------------------------------------------------------------------
       await updatePullStage(firmId, 'Writing snapshots');
-      const config = await getFirmConfig(firmId);
       const snapshotRows = buildSnapshotsFromKpiResults(
         firmId,
         pulledAt,
@@ -311,7 +316,7 @@ export class PullOrchestrator {
       const riskFlags = scanForRiskFlags({
         firmId,
         kpiSnapshots: snapshotRows,
-        config,
+        config: firmConfig,
         pulledAt,
       });
 

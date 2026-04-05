@@ -292,6 +292,8 @@ export interface FirmConfigTier1 {
   revenueAttribution?: 'responsible_lawyer' | 'billing_lawyer' | 'supervisor';
   showLawyerPerspective?: boolean;
   showDiscrepancies?: boolean;
+  /** How many months back to pull time entries, invoices, and ledgers. Default: 6. */
+  dataPullLookbackMonths?: number;
 }
 
 export interface FirmConfigTier2 {

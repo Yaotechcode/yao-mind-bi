@@ -21,6 +21,7 @@ import {
   YaoApiError,
   YaoRateLimitError,
 } from './errors.js';
+import type { FirmConfig } from '../../shared/types/index.js';
 import type {
   YaoAttorney,
   YaoDepartment,
@@ -433,16 +434,18 @@ export class DataSourceAdapter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Fetches time entries via cursor pagination (POST /time-entries/search).
+   * Fetches time entries via page-based pagination (POST /time-entries/search).
    * Strips password and email_default_signature from assignee objects.
    * Excludes CONSOLIDATED and CONSOLIDATION_TARGET records — only ACTIVE entries
-   * are relevant for KPI calculation. If a future firm config option requires
-   * including consolidated entries, add an options param here and pass it through.
+   * are relevant for KPI calculation.
+   * @param fromDate  Optional ISO date string ('YYYY-MM-DD') to limit results to records on/after this date.
    */
-  async fetchTimeEntries(): Promise<YaoTimeEntry[]> {
+  async fetchTimeEntries(fromDate?: string): Promise<YaoTimeEntry[]> {
+    const body: Record<string, unknown> = {};
+    if (fromDate) body['date_from'] = fromDate;
     const raw = await this.paginatePost<Record<string, unknown>>(
       '/time-entries/search',
-      {},
+      body,
       'result',
       'page',
       50,
@@ -460,11 +463,14 @@ export class DataSourceAdapter {
    * Fetches all invoices via page-based pagination.
    * POST /invoices/search returns a root-level array — resultKey is ''.
    * All statuses are included (DRAFT, ISSUED, PAID, CREDITED, WRITTEN_OFF, CANCELED).
+   * @param fromDate  Optional ISO date string ('YYYY-MM-DD') to limit results to records on/after this date.
    */
-  async fetchInvoices(): Promise<YaoInvoice[]> {
+  async fetchInvoices(fromDate?: string): Promise<YaoInvoice[]> {
+    const body: Record<string, unknown> = {};
+    if (fromDate) body['date_from'] = fromDate;
     return this.paginatePost<YaoInvoice>(
       '/invoices/search',
-      {},
+      body,
       '',       // root-level array response — no wrapper key
       'page',
       50,
@@ -484,13 +490,15 @@ export class DataSourceAdapter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Fetches OFFICE_PAYMENT, CLIENT_TO_OFFICE, and OFFICE_RECEIPT ledger records
-   * via page-based pagination. Response is a root-level array.
+   * Fetches ledger records via page-based pagination. Response is a root-level array.
+   * @param fromDate  Optional ISO date string ('YYYY-MM-DD') to limit results to records on/after this date.
    */
-  async fetchLedgers(): Promise<YaoLedger[]> {
+  async fetchLedgers(fromDate?: string): Promise<YaoLedger[]> {
+    const body: Record<string, unknown> = {};
+    if (fromDate) body['date_from'] = fromDate;
     return this.paginatePost<YaoLedger>(
       '/ledgers/search',
-      {},
+      body,
       '',       // root-level array response
       'page',
       50,
@@ -602,9 +610,12 @@ export class DataSourceAdapter {
    * Step 3 — Summary + routing (fast, single calls):
    *   invoice summary (single GET), ledger routing (pure function).
    *
+   * @param firmConfig  Optional firm config. dataPullLookbackMonths controls how far
+   *                    back time entries, invoices, and ledgers are fetched (default: 6).
+   *
    * Returns a single object containing all datasets and lookup maps.
    */
-  async fetchAll(): Promise<{
+  async fetchAll(firmConfig?: Partial<FirmConfig>): Promise<{
     attorneys: YaoAttorney[];
     departments: YaoDepartment[];
     caseTypes: YaoCaseType[];
@@ -621,6 +632,12 @@ export class DataSourceAdapter {
       caseTypeMap: CaseTypeMap;
     };
   }> {
+    // Calculate lookback date for transactional datasets
+    const lookbackMonths = firmConfig?.dataPullLookbackMonths ?? 6;
+    const fromDate = new Date();
+    fromDate.setMonth(fromDate.getMonth() - lookbackMonths);
+    const dateFrom = fromDate.toISOString().split('T')[0];
+
     // Step 1: lookup tables — must complete before transactional fetches
     const { attorneys, departments, caseTypes, attorneyMap, departmentMap, caseTypeMap } =
       await this.fetchLookupTables();
@@ -628,9 +645,9 @@ export class DataSourceAdapter {
     // Step 2: all transactional datasets in parallel
     const [matters, timeEntries, invoices, rawLedgers, tasks, contacts] = await Promise.all([
       this.fetchMatters(),
-      this.fetchTimeEntries(),
-      this.fetchInvoices(),
-      this.fetchLedgers(),
+      this.fetchTimeEntries(dateFrom),
+      this.fetchInvoices(dateFrom),
+      this.fetchLedgers(dateFrom),
       this.fetchTasks(),
       this.fetchContacts(),
     ]);
