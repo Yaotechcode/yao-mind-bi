@@ -287,6 +287,17 @@ describe('transformMatter()', () => {
     expect(result.departmentName).toBe('Conveyancing');
   });
 
+  it('reads departmentName inline from nested department.title without map lookup', () => {
+    // This is the key inline-population check: when the API returns a nested object,
+    // transformMatter must set departmentName directly so the resolver skips it.
+    const result = transformMatter(
+      makeMatter({ department: { _id: 'dept-99', title: 'Family' } }),
+      MAPS, // dept-99 is NOT in MAPS.departmentMap
+    );
+    expect(result.departmentId).toBe('dept-99');
+    expect(result.departmentName).toBe('Family');
+  });
+
   it('falls back to departmentMap when nested title missing', () => {
     const result = transformMatter(
       makeMatter({ department: { _id: 'dept-1', title: '' } }),

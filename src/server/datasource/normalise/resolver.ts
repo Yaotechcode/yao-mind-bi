@@ -237,19 +237,34 @@ export function resolveAll(data: ResolveAllInput, maps: LookupMaps): ResolveAllI
     resolveInvoiceEnrichment(i, maps, stats.invoices),
   );
 
-  console.log(
-    '[resolver] Resolution complete —' +
-      ` timeEntries: ${stats.timeEntries.total} enriched` +
-      ` (rate: ${stats.timeEntries.lawyerRate}, status: ${stats.timeEntries.lawyerStatus})` +
-      ` | matters: ${stats.matters.total} enriched from map` +
+  const parts: string[] = ['[resolver] Resolution complete —'];
+
+  if (data.timeEntries.length > 0) {
+    parts.push(
+      `timeEntries: ${stats.timeEntries.total} enriched` +
+      ` (rate: ${stats.timeEntries.lawyerRate}, status: ${stats.timeEntries.lawyerStatus})`,
+    );
+  }
+
+  if (data.matters.length > 0) {
+    parts.push(
+      `matters: ${stats.matters.total} enriched from map` +
       ` (deptName: ${stats.matters.departmentName}, caseTypeName: ${stats.matters.caseTypeName}` +
       `, lawyerName: ${stats.matters.responsibleLawyerName})` +
       ` | matters already inline: deptName=${stats.matters.alreadyHadDepartmentName}` +
       ` caseType=${stats.matters.alreadyHadCaseTypeName}` +
-      ` lawyerName=${stats.matters.alreadyHadLawyerName}` +
-      ` | invoices: ${stats.invoices.total} enriched from map` +
+      ` lawyerName=${stats.matters.alreadyHadLawyerName}`,
+    );
+  }
+
+  if (data.invoices.length > 0) {
+    parts.push(
+      `invoices: ${stats.invoices.total} enriched from map` +
       `, ${stats.invoices.alreadyHadLawyerName} already inline`,
-  );
+    );
+  }
+
+  console.log(parts.join(' | '));
 
   return {
     ...data,
