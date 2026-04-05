@@ -30,6 +30,11 @@
   timeout = 900   # 15 minutes max — Background Functions have no request timeout
 
 [[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+
+[[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
