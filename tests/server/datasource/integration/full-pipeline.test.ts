@@ -568,6 +568,7 @@ describe('Test 3: matters pagination stop condition', () => {
 
   it('fetches page 2 when page 1 returns exactly the limit', async () => {
     // Page 1: 50 matters (== limit → continue); Page 2: 5 matters → stop
+    // Phase B dispatches pages 2-6 concurrently (batch=5); pages 3-6 return empty.
     const mockFetch = createMockFetch({ mattersPage1Count: 50, mattersPage2Count: 5 });
     const adapter = await makeAuthenticatedAdapter(mockFetch);
 
@@ -578,7 +579,8 @@ describe('Test 3: matters pagination stop condition', () => {
     const mattersCalls = (mockFetch as ReturnType<typeof vi.fn>).mock.calls.filter(
       ([url]: [string]) => new URL(url).pathname === '/matters',
     );
-    expect(mattersCalls).toHaveLength(2);
+    // Phase A: 1 call (page 1). Phase B: 5 concurrent calls (pages 2-6).
+    expect(mattersCalls).toHaveLength(6);
   });
 
   it('page 2 request carries correct page param', async () => {
@@ -618,6 +620,7 @@ describe('Test 4: time entry page-based pagination', () => {
   });
 
   it('second request sends page=2 when page 1 returns full page', async () => {
+    // Phase B dispatches pages 2-6 concurrently; page 2 returns 1 entry, pages 3-6 return empty.
     const mockFetch = createMockFetch({ timeEntriesMultiPage: true });
     const adapter = await makeAuthenticatedAdapter(mockFetch);
 
@@ -627,7 +630,8 @@ describe('Test 4: time entry page-based pagination', () => {
       ([url]: [string]) => new URL(url).pathname === '/time-entries/search',
     );
 
-    expect(teCalls).toHaveLength(2); // page 1 + page 2
+    // Phase A: 1 call (page 1). Phase B: 5 concurrent calls (pages 2-6).
+    expect(teCalls).toHaveLength(6);
     const secondBody = JSON.parse(teCalls[1][1].body as string) as Record<string, unknown>;
     expect(secondBody['page']).toBe(2);
   });

@@ -104,12 +104,16 @@ describe('fetchMatters()', () => {
     const lastPage = [makeMatter({ _id: 'm-last', number: 999 })];
 
     mockFetch
-      .mockResolvedValueOnce(makeResponse({ rows: fullPage }))
-      .mockResolvedValueOnce(makeResponse({ rows: lastPage }));
+      .mockResolvedValueOnce(makeResponse({ rows: fullPage }))  // page 1 (Phase A)
+      .mockResolvedValueOnce(makeResponse({ rows: lastPage }))  // page 2 (Phase B batch)
+      .mockResolvedValueOnce(makeResponse({ rows: [] }))        // page 3
+      .mockResolvedValueOnce(makeResponse({ rows: [] }))        // page 4
+      .mockResolvedValueOnce(makeResponse({ rows: [] }))        // page 5
+      .mockResolvedValueOnce(makeResponse({ rows: [] }));       // page 6
 
     const result = await adapter.fetchMatters();
     expect(result).toHaveLength(51);
-    expect(mockFetch).toHaveBeenCalledTimes(3); // 1 auth + 2 pages
+    expect(mockFetch).toHaveBeenCalledTimes(7); // 1 auth + 6 pages (1 Phase A + 5 Phase B)
   });
 
   it('sends page and limit as query params', async () => {

@@ -113,23 +113,32 @@ describe('fetchInvoices()', () => {
     const lastPage = [makeInvoice()];
 
     mockFetch
-      .mockResolvedValueOnce(makeResponse(fullPage))
-      .mockResolvedValueOnce(makeResponse(lastPage));
+      .mockResolvedValueOnce(makeResponse(fullPage))   // page 1 (Phase A)
+      .mockResolvedValueOnce(makeResponse(lastPage))   // page 2 (Phase B)
+      .mockResolvedValueOnce(makeResponse([]))          // page 3
+      .mockResolvedValueOnce(makeResponse([]))          // page 4
+      .mockResolvedValueOnce(makeResponse([]))          // page 5
+      .mockResolvedValueOnce(makeResponse([]));         // page 6
 
     const result = await adapter.fetchInvoices();
     expect(result).toHaveLength(51);
-    expect(mockFetch).toHaveBeenCalledTimes(3); // 1 auth + 2 pages
+    expect(mockFetch).toHaveBeenCalledTimes(7); // 1 auth + 6 pages (1 Phase A + 5 Phase B)
   });
 
   it('increments page number in successive requests', async () => {
     const adapter = await authenticatedAdapter();
     const fullPage = Array.from({ length: 50 }, () => makeInvoice());
     mockFetch
-      .mockResolvedValueOnce(makeResponse(fullPage))
-      .mockResolvedValueOnce(makeResponse([]));
+      .mockResolvedValueOnce(makeResponse(fullPage))   // page 1 (Phase A)
+      .mockResolvedValueOnce(makeResponse([]))          // page 2 (Phase B, 1st in batch)
+      .mockResolvedValueOnce(makeResponse([]))          // page 3
+      .mockResolvedValueOnce(makeResponse([]))          // page 4
+      .mockResolvedValueOnce(makeResponse([]))          // page 5
+      .mockResolvedValueOnce(makeResponse([]));         // page 6
 
     await adapter.fetchInvoices();
 
+    // calls[0]=auth, calls[1]=page1, calls[2]=page2 (first in Phase B batch)
     const firstBody = JSON.parse(
       (mockFetch.mock.calls[1] as [string, RequestInit])[1].body as string,
     ) as Record<string, unknown>;

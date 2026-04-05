@@ -169,7 +169,7 @@ export function getDefaultFirmConfig(firmId: string, firmName: string = ''): Fir
     revenueAttribution: 'responsible_lawyer',
     showLawyerPerspective: true,
     showDiscrepancies: true,
-    dataPullLookbackMonths: 6,
+    dataPullLookbackMonths: 3,
 
     // --- Tier 2: Data & Schema ---
     entityDefinitions: {} as Partial<Record<EntityType, import('../types/index.js').EntityDefinition>>,

@@ -227,8 +227,12 @@ describe('fetchContacts()', () => {
       makeContact({ _id: `c-${i}` }),
     );
     mockFetch
-      .mockResolvedValueOnce(makeResponse({ rows: fullPage }))
-      .mockResolvedValueOnce(makeResponse({ rows: [makeContact({ _id: 'c-last' })] }));
+      .mockResolvedValueOnce(makeResponse({ rows: fullPage }))                       // page 1 (Phase A)
+      .mockResolvedValueOnce(makeResponse({ rows: [makeContact({ _id: 'c-last' })] })) // page 2 (Phase B)
+      .mockResolvedValueOnce(makeResponse({ rows: [] }))                             // page 3
+      .mockResolvedValueOnce(makeResponse({ rows: [] }))                             // page 4
+      .mockResolvedValueOnce(makeResponse({ rows: [] }))                             // page 5
+      .mockResolvedValueOnce(makeResponse({ rows: [] }));                            // page 6
 
     const result = await adapter.fetchContacts();
     expect(result).toHaveLength(51);

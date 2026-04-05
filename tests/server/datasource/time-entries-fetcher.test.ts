@@ -88,12 +88,16 @@ describe('fetchTimeEntries()', () => {
     const adapter = await authenticatedAdapter();
     const fullPage = Array.from({ length: 50 }, (_, i) => makeEntry({ _id: `te-p1-${i}` }));
     mockFetch
-      .mockResolvedValueOnce(makeResponse({ result: fullPage }))
-      .mockResolvedValueOnce(makeResponse({ result: [makeEntry({ _id: 'te-p2-0' })] }));
+      .mockResolvedValueOnce(makeResponse({ result: fullPage }))                       // page 1 (Phase A)
+      .mockResolvedValueOnce(makeResponse({ result: [makeEntry({ _id: 'te-p2-0' })] })) // page 2 (Phase B)
+      .mockResolvedValueOnce(makeResponse({ result: [] }))                             // page 3
+      .mockResolvedValueOnce(makeResponse({ result: [] }))                             // page 4
+      .mockResolvedValueOnce(makeResponse({ result: [] }))                             // page 5
+      .mockResolvedValueOnce(makeResponse({ result: [] }));                            // page 6
 
     const result = await adapter.fetchTimeEntries();
     expect(result).toHaveLength(51);
-    expect(mockFetch).toHaveBeenCalledTimes(3); // 1 auth + 2 pages
+    expect(mockFetch).toHaveBeenCalledTimes(7); // 1 auth + 6 pages (1 Phase A + 5 Phase B)
   });
 
   it('stops after single page when result.length < size', async () => {
@@ -109,11 +113,16 @@ describe('fetchTimeEntries()', () => {
     const adapter = await authenticatedAdapter();
     const fullPage = Array.from({ length: 50 }, (_, i) => makeEntry({ _id: `te-${i}` }));
     mockFetch
-      .mockResolvedValueOnce(makeResponse({ result: fullPage }))
-      .mockResolvedValueOnce(makeResponse({ result: [] }));
+      .mockResolvedValueOnce(makeResponse({ result: fullPage })) // page 1 (Phase A)
+      .mockResolvedValueOnce(makeResponse({ result: [] }))       // page 2 (Phase B, 1st in batch)
+      .mockResolvedValueOnce(makeResponse({ result: [] }))       // page 3
+      .mockResolvedValueOnce(makeResponse({ result: [] }))       // page 4
+      .mockResolvedValueOnce(makeResponse({ result: [] }))       // page 5
+      .mockResolvedValueOnce(makeResponse({ result: [] }));      // page 6
 
     await adapter.fetchTimeEntries();
 
+    // calls[0]=auth, calls[1]=page1, calls[2]=page2 (first in Phase B batch)
     const secondCall = mockFetch.mock.calls[2] as [string, RequestInit];
     const body = JSON.parse(secondCall[1].body as string) as Record<string, unknown>;
     expect(body['page']).toBe(2);

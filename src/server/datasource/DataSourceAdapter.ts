@@ -350,6 +350,138 @@ export class DataSourceAdapter {
   }
 
   // ---------------------------------------------------------------------------
+  // Parallel pagination helpers (batch=5 concurrent pages)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Parallel page-based GET pagination.
+   * Phase A fetches page 1. If a full page is returned, Phase B fetches the next
+   * `batchSize` pages concurrently and repeats until a short/null page is found.
+   * This significantly reduces wall-clock time for endpoints with many pages.
+   *
+   * @param stopOnServerError  When true, a 5xx on any page returns null for that
+   *                           page (stops that batch) rather than throwing.
+   */
+  private async parallelPaginateGet<T>(
+    path: string,
+    params: Record<string, string>,
+    resultKey: string,
+    limit = 50,
+    stopOnServerError = false,
+    batchSize = 5,
+  ): Promise<T[]> {
+    const all: T[] = [];
+
+    // Phase A: page 1
+    let firstRows: T[];
+    try {
+      const response = await this.request<Record<string, unknown>>('GET', path, {
+        params: { ...params, page: '1', limit: String(limit) },
+      });
+      firstRows = (response[resultKey] ?? []) as T[];
+    } catch (err) {
+      if (stopOnServerError && err instanceof YaoApiError && (err as YaoApiError).statusCode >= 500) {
+        const msg = `${path} page 1 returned ${(err as YaoApiError).statusCode} — stopping pagination early with 0 records`;
+        console.warn(`[DataSourceAdapter] WARNING: ${msg}`);
+        this._warnings.push(msg);
+        return [];
+      }
+      throw err;
+    }
+    all.push(...firstRows);
+    if (firstRows.length < limit) return all;
+
+    // Phase B: batches of batchSize concurrent pages
+    let nextPage = 2;
+    while (true) {
+      const pageNumbers = Array.from({ length: batchSize }, (_, i) => nextPage + i);
+
+      const results = await Promise.all(
+        pageNumbers.map(async (p): Promise<T[] | null> => {
+          try {
+            const response = await this.request<Record<string, unknown>>('GET', path, {
+              params: { ...params, page: String(p), limit: String(limit) },
+            });
+            return (response[resultKey] ?? []) as T[];
+          } catch (err) {
+            if (stopOnServerError && err instanceof YaoApiError && (err as YaoApiError).statusCode >= 500) {
+              const msg = `${path} page ${p} returned ${(err as YaoApiError).statusCode} — stopping pagination early`;
+              console.warn(`[DataSourceAdapter] WARNING: ${msg}`);
+              this._warnings.push(msg);
+              return null;
+            }
+            throw err;
+          }
+        }),
+      );
+
+      let done = false;
+      for (const rows of results) {
+        if (rows === null) { done = true; break; }
+        all.push(...rows);
+        if (rows.length < limit) { done = true; break; }
+      }
+      if (done) break;
+      nextPage += batchSize;
+    }
+
+    return all;
+  }
+
+  /**
+   * Parallel page-based POST pagination.
+   * Same two-phase strategy as parallelPaginateGet but uses POST with a `page`
+   * field in the request body. Supports root-level array responses (resultKey='').
+   */
+  private async parallelPaginatePost<T>(
+    path: string,
+    body: object,
+    resultKey: string,
+    size = 50,
+    batchSize = 5,
+  ): Promise<T[]> {
+    const all: T[] = [];
+
+    const extractRows = (response: unknown): T[] => {
+      if (resultKey === '') return (response as T[] | null) ?? [];
+      return ((response as Record<string, unknown>)[resultKey] ?? []) as T[];
+    };
+
+    // Phase A: page 1
+    const response1 = await this.request<unknown>('POST', path, {
+      body: { ...body, size, page: 1 },
+    });
+    const firstRows = extractRows(response1);
+    all.push(...firstRows);
+    if (firstRows.length < size) return all;
+
+    // Phase B: batches of batchSize concurrent pages
+    let nextPage = 2;
+    while (true) {
+      const pageNumbers = Array.from({ length: batchSize }, (_, i) => nextPage + i);
+
+      const results = await Promise.all(
+        pageNumbers.map(async (p): Promise<T[]> => {
+          const response = await this.request<unknown>('POST', path, {
+            body: { ...body, size, page: p },
+          });
+          return extractRows(response);
+        }),
+      );
+
+      let done = false;
+      for (const rows of results) {
+        all.push(...rows);
+        if (rows.length < size) { done = true; break; }
+      }
+      if (done) break;
+      nextPage += batchSize;
+    }
+
+    return all;
+  }
+
+  // ---------------------------------------------------------------------------
   // Lookup table fetchers
   // ---------------------------------------------------------------------------
 
@@ -430,7 +562,7 @@ export class DataSourceAdapter {
    * sensitive nested fields (password, email_default_signature) as a belt-and-suspenders measure.
    */
   async fetchMatters(): Promise<YaoMatter[]> {
-    const raw = await this.paginateGet<Record<string, unknown>>('/matters', {}, 'rows', 50);
+    const raw = await this.parallelPaginateGet<Record<string, unknown>>('/matters', {}, 'rows', 50);
     const pruned = pruneArray(raw, MATTER_KEEP_FIELDS);
     return pruned.map(m => stripNestedSensitiveFields(m)) as unknown as YaoMatter[];
   }
@@ -448,11 +580,10 @@ export class DataSourceAdapter {
   async fetchTimeEntries(fromDate?: string): Promise<YaoTimeEntry[]> {
     const body: Record<string, unknown> = {};
     if (fromDate) body['date_from'] = fromDate;
-    const raw = await this.paginatePost<Record<string, unknown>>(
+    const raw = await this.parallelPaginatePost<Record<string, unknown>>(
       '/time-entries/search',
       body,
       'result',
-      'page',
       50,
     );
     // Filter for ACTIVE before pruning (status field is not in the pruned shape)
@@ -474,11 +605,10 @@ export class DataSourceAdapter {
   async fetchInvoices(fromDate?: string): Promise<YaoInvoice[]> {
     const body: Record<string, unknown> = {};
     if (fromDate) body['date_from'] = fromDate;
-    const raw = await this.paginatePost<Record<string, unknown>>(
+    const raw = await this.parallelPaginatePost<Record<string, unknown>>(
       '/invoices/search',
       body,
       '',       // root-level array response — no wrapper key
-      'page',
       50,
     );
     return pruneArray(raw, INVOICE_KEEP_FIELDS) as unknown as YaoInvoice[];
@@ -503,11 +633,10 @@ export class DataSourceAdapter {
   async fetchLedgers(fromDate?: string): Promise<YaoLedger[]> {
     const body: Record<string, unknown> = {};
     if (fromDate) body['date_from'] = fromDate;
-    const raw = await this.paginatePost<Record<string, unknown>>(
+    const raw = await this.parallelPaginatePost<Record<string, unknown>>(
       '/ledgers/search',
       body,
       '',       // root-level array response
-      'page',
       50,
     );
     return pruneArray(raw, LEDGER_KEEP_FIELDS) as unknown as YaoLedger[];
@@ -574,7 +703,7 @@ export class DataSourceAdapter {
    * Excludes DELETED tasks. Prunes to keep only fields needed for KPI calculation.
    */
   async fetchTasks(): Promise<YaoTask[]> {
-    const raw = await this.paginateGet<Record<string, unknown>>(
+    const raw = await this.parallelPaginateGet<Record<string, unknown>>(
       '/tasks',
       {},
       'rows',
@@ -596,7 +725,7 @@ export class DataSourceAdapter {
    * Prunes to keep only fields needed for KPI calculation.
    */
   async fetchContacts(): Promise<YaoContact[]> {
-    const raw = await this.paginateGet<Record<string, unknown>>(
+    const raw = await this.parallelPaginateGet<Record<string, unknown>>(
       '/contacts',
       { is_archived: 'false' },
       'rows',
@@ -644,7 +773,7 @@ export class DataSourceAdapter {
     };
   }> {
     // Calculate lookback date for transactional datasets
-    const lookbackMonths = firmConfig?.dataPullLookbackMonths ?? 6;
+    const lookbackMonths = firmConfig?.dataPullLookbackMonths ?? 3;
     const fromDate = new Date();
     fromDate.setMonth(fromDate.getMonth() - lookbackMonths);
     const dateFrom = fromDate.toISOString().split('T')[0];
