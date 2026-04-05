@@ -39,6 +39,18 @@ import type {
   CaseTypeMap,
   LookupTables,
 } from './types.js';
+import {
+  pruneArray,
+  ATTORNEY_KEEP_FIELDS,
+  DEPARTMENT_KEEP_FIELDS,
+  CASE_TYPE_KEEP_FIELDS,
+  MATTER_KEEP_FIELDS,
+  TIME_ENTRY_KEEP_FIELDS,
+  INVOICE_KEEP_FIELDS,
+  LEDGER_KEEP_FIELDS,
+  TASK_KEEP_FIELDS,
+  CONTACT_KEEP_FIELDS,
+} from './pruner.js';
 
 // =============================================================================
 // Helpers
@@ -343,25 +355,27 @@ export class DataSourceAdapter {
 
   /**
    * Fetches all attorneys (active, pending, and disabled — needed for historical data).
-   * Strips password and email_default_signature from every record before returning.
+   * Prunes to keep only fields needed for KPI calculation.
    */
   async fetchAttorneys(): Promise<YaoAttorney[]> {
     const raw = await this.request<Record<string, unknown>[]>('GET', '/attorneys');
-    return raw.map((a) => stripNestedSensitiveFields(a)) as unknown as YaoAttorney[];
+    return pruneArray(raw, ATTORNEY_KEEP_FIELDS) as unknown as YaoAttorney[];
   }
 
   /**
    * Fetches all departments. Includes deleted ones — callers filter by is_deleted.
    */
   async fetchDepartments(): Promise<YaoDepartment[]> {
-    return this.request<YaoDepartment[]>('GET', '/departments');
+    const raw = await this.request<Record<string, unknown>[]>('GET', '/departments');
+    return pruneArray(raw, DEPARTMENT_KEEP_FIELDS) as unknown as YaoDepartment[];
   }
 
   /**
    * Fetches active case types.
    */
   async fetchCaseTypes(): Promise<YaoCaseType[]> {
-    return this.request<YaoCaseType[]>('GET', '/case-types/active');
+    const raw = await this.request<Record<string, unknown>[]>('GET', '/case-types/active');
+    return pruneArray(raw, CASE_TYPE_KEEP_FIELDS) as unknown as YaoCaseType[];
   }
 
   // ---------------------------------------------------------------------------
@@ -375,12 +389,9 @@ export class DataSourceAdapter {
         fullName: `${a.name} ${a.surname}`,
         firstName: a.name,
         lastName: a.surname,
-        email: a.email,
         status: a.status,
         defaultRate: a.rates?.find((r) => r.default)?.value ?? null,
         allRates: a.rates ?? [],
-        integrationAccountId: a.integration_account_id ?? null,
-        integrationAccountCode: a.integration_account_code ?? null,
         jobTitle: a.job_title ?? null,
       };
     }
@@ -415,16 +426,13 @@ export class DataSourceAdapter {
 
   /**
    * Fetches all matters via page-based pagination.
-   * Strips password and email_default_signature from any nested attorney objects.
+   * Prunes to keep only fields needed for KPI calculation. Also strips any
+   * sensitive nested fields (password, email_default_signature) as a belt-and-suspenders measure.
    */
   async fetchMatters(): Promise<YaoMatter[]> {
-    const raw = await this.paginateGet<Record<string, unknown>>(
-      '/matters',
-      {},
-      'rows',
-      50,
-    );
-    return raw.map((m) => stripNestedSensitiveFields(m)) as unknown as YaoMatter[];
+    const raw = await this.paginateGet<Record<string, unknown>>('/matters', {}, 'rows', 50);
+    const pruned = pruneArray(raw, MATTER_KEEP_FIELDS);
+    return pruned.map(m => stripNestedSensitiveFields(m)) as unknown as YaoMatter[];
   }
 
   // ---------------------------------------------------------------------------
@@ -433,9 +441,8 @@ export class DataSourceAdapter {
 
   /**
    * Fetches time entries via page-based pagination (POST /time-entries/search).
-   * Strips password and email_default_signature from assignee objects.
    * Excludes CONSOLIDATED and CONSOLIDATION_TARGET records — only ACTIVE entries
-   * are relevant for KPI calculation.
+   * are relevant for KPI calculation. Status is filtered on raw records before pruning.
    * @param fromDate  Optional ISO date string ('YYYY-MM-DD') to limit results to records on/after this date.
    */
   async fetchTimeEntries(fromDate?: string): Promise<YaoTimeEntry[]> {
@@ -448,9 +455,10 @@ export class DataSourceAdapter {
       'page',
       50,
     );
-    return raw
-      .map((e) => stripNestedSensitiveFields(e) as unknown as YaoTimeEntry)
-      .filter((e) => e.status === 'ACTIVE');
+    // Filter for ACTIVE before pruning (status field is not in the pruned shape)
+    const active = raw.filter(e => e['status'] === 'ACTIVE');
+    return pruneArray(active, TIME_ENTRY_KEEP_FIELDS)
+      .map(e => stripNestedSensitiveFields(e)) as unknown as YaoTimeEntry[];
   }
 
   // ---------------------------------------------------------------------------
@@ -466,13 +474,14 @@ export class DataSourceAdapter {
   async fetchInvoices(fromDate?: string): Promise<YaoInvoice[]> {
     const body: Record<string, unknown> = {};
     if (fromDate) body['date_from'] = fromDate;
-    return this.paginatePost<YaoInvoice>(
+    const raw = await this.paginatePost<Record<string, unknown>>(
       '/invoices/search',
       body,
       '',       // root-level array response — no wrapper key
       'page',
       50,
     );
+    return pruneArray(raw, INVOICE_KEEP_FIELDS) as unknown as YaoInvoice[];
   }
 
   /**
@@ -494,13 +503,14 @@ export class DataSourceAdapter {
   async fetchLedgers(fromDate?: string): Promise<YaoLedger[]> {
     const body: Record<string, unknown> = {};
     if (fromDate) body['date_from'] = fromDate;
-    return this.paginatePost<YaoLedger>(
+    const raw = await this.paginatePost<Record<string, unknown>>(
       '/ledgers/search',
       body,
       '',       // root-level array response
       'page',
       50,
     );
+    return pruneArray(raw, LEDGER_KEEP_FIELDS) as unknown as YaoLedger[];
   }
 
   /**
@@ -561,7 +571,7 @@ export class DataSourceAdapter {
 
   /**
    * Fetches tasks via page-based GET pagination.
-   * Excludes DELETED tasks. Strips sensitive fields from assigned_to.
+   * Excludes DELETED tasks. Prunes to keep only fields needed for KPI calculation.
    */
   async fetchTasks(): Promise<YaoTask[]> {
     const raw = await this.paginateGet<Record<string, unknown>>(
@@ -571,9 +581,10 @@ export class DataSourceAdapter {
       50,
       true, // stopOnServerError: Yao API returns 500 on page 3
     );
-    return raw
-      .map((t) => stripNestedSensitiveFields(t) as unknown as YaoTask)
-      .filter((t) => t.status !== 'DELETED');
+    // Filter DELETED before pruning (status is in TASK_KEEP_FIELDS so can filter after too, but safer before)
+    const notDeleted = raw.filter(t => t['status'] !== 'DELETED');
+    return pruneArray(notDeleted, TASK_KEEP_FIELDS)
+      .map(t => stripNestedSensitiveFields(t)) as unknown as YaoTask[];
   }
 
   // ---------------------------------------------------------------------------
@@ -582,14 +593,16 @@ export class DataSourceAdapter {
 
   /**
    * Fetches active (non-archived) contacts via page-based GET pagination.
+   * Prunes to keep only fields needed for KPI calculation.
    */
   async fetchContacts(): Promise<YaoContact[]> {
-    return this.paginateGet<YaoContact>(
+    const raw = await this.paginateGet<Record<string, unknown>>(
       '/contacts',
       { is_archived: 'false' },
       'rows',
       50,
     );
+    return pruneArray(raw, CONTACT_KEEP_FIELDS) as unknown as YaoContact[];
   }
 
   // ---------------------------------------------------------------------------

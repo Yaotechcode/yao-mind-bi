@@ -59,17 +59,18 @@ export function transformAttorney(raw: YaoAttorney): NormalisedAttorney {
     fullName: fullName(raw.name, raw.surname),
     firstName: raw.name,
     lastName: raw.surname,
-    email: raw.email,
+    // Fields not in ATTORNEY_KEEP_FIELDS — always null/default after pruning
+    email: '',
+    integrationAccountId: null,
+    integrationAccountCode: null,
+    phone: null,
+    lawFirm: '',
+    createdAt: '',
+    updatedAt: '',
     status: raw.status,
     defaultRate: defaultRate(raw.rates),
     allRates: raw.rates ?? [],
-    integrationAccountId: raw.integration_account_id ?? null,
-    integrationAccountCode: raw.integration_account_code ?? null,
     jobTitle: raw.job_title ?? null,
-    phone: raw.phone ?? null,
-    lawFirm: raw.law_firm,
-    createdAt: raw.created_at,
-    updatedAt: raw.updated_at,
   };
 }
 
@@ -80,7 +81,8 @@ export function transformMatter(raw: YaoMatter, maps: LookupMaps): NormalisedMat
   return {
     _id: raw._id,
     number: raw.number,
-    numberString: raw.number_string ?? null,
+    // number_string, private, archived_date, law_firm not in MATTER_KEEP_FIELDS
+    numberString: null,
     caseName: raw.case_name,
     status: raw.status,
 
@@ -89,7 +91,7 @@ export function transformMatter(raw: YaoMatter, maps: LookupMaps): NormalisedMat
     isActive: ACTIVE_STATUSES.has(raw.status),
     isClosed: CLOSED_STATUSES.has(raw.status),
     isFixedFee: maps.caseTypeMap[caseTypeId ?? '']?.isFixedFee ?? false,
-    isPrivate: raw.private ?? false,
+    isPrivate: false,
     source: raw.source ?? null,
     sourceContactName: raw.source_contact_name ?? null,
 
@@ -126,14 +128,14 @@ export function transformMatter(raw: YaoMatter, maps: LookupMaps): NormalisedMat
     clientIds: raw.clients?.map((c) => c.contact._id) ?? [],
     clientNames: raw.clients?.map((c) => c.contact.display_name) ?? [],
 
-    // Firm
-    lawFirmId: typeof raw.law_firm === 'object' ? raw.law_firm._id : raw.law_firm,
+    // law_firm not in MATTER_KEEP_FIELDS
+    lawFirmId: '',
 
     // Dates
     lastStatusUpdate: raw.last_status_update ?? null,
     inProgressDate: raw.in_progress_date ?? null,
     completedDate: raw.completed_date ?? null,
-    archivedDate: raw.archived_date ?? null,
+    archivedDate: null,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
   };
@@ -142,18 +144,20 @@ export function transformMatter(raw: YaoMatter, maps: LookupMaps): NormalisedMat
 export function transformTimeEntry(raw: YaoTimeEntry): NormalisedTimeEntry {
   return {
     _id: raw._id,
-    description: raw.description,
+    // description, rate, client_rate, units, status, invoice, created_at, updated_at
+    // not in TIME_ENTRY_KEEP_FIELDS — default to empty/zero/null
+    description: '',
     activityType: raw.activity?.title ?? raw.work_type ?? null,
     durationHours: raw.duration_minutes / 60,
     isChargeable: !raw.do_not_bill && raw.billable > 0,
     doNotBill: raw.do_not_bill,
-    rate: raw.rate,
-    clientRate: raw.client_rate ?? null,
-    units: raw.units,
+    rate: 0,
+    clientRate: null,
+    units: 0,
     billable: raw.billable,
     writeOff: raw.write_off,
     recordedValue: raw.billable + raw.write_off,
-    status: raw.status,
+    status: 'ACTIVE',
     lawyerId: raw.assignee?._id ?? null,
     lawyerName: raw.assignee
       ? fullName(raw.assignee.name, raw.assignee.surname)
@@ -163,10 +167,10 @@ export function transformTimeEntry(raw: YaoTimeEntry): NormalisedTimeEntry {
     lawyerIntegrationId: null, // populated by resolution layer
     matterId: raw.matter._id,
     matterNumber: raw.matter.number,
-    invoice: raw.invoice ?? null,
+    invoice: null,
     date: raw.date,
-    createdAt: raw.created_at,
-    updatedAt: raw.updated_at,
+    createdAt: '',
+    updatedAt: '',
   };
 }
 
@@ -177,19 +181,21 @@ export function transformInvoice(raw: YaoInvoice): NormalisedInvoice {
     invoiceDate: raw.invoice_date,
     dueDate: raw.due_date,
     subtotal: raw.subtotal,
-    totalDisbursements: raw.total_disbursements,
-    totalOtherFees: raw.total_other_fees,
+    // total_disbursements, total_other_fees, credited, vat_percentage, type, narrative,
+    // reference, integration_id, created_at, updated_at not in INVOICE_KEEP_FIELDS
+    totalDisbursements: 0,
+    totalOtherFees: 0,
     totalFirmFees: raw.total_firm_fees,
     writeOff: raw.write_off,
     total: raw.total,
     outstanding: raw.outstanding,
     paid: raw.paid,
-    credited: raw.credited,
+    credited: 0,
     writtenOff: raw.written_off,
     vat: raw.vat,
-    vatPercentage: raw.vat_percentage,
-    status: raw.status,
-    type: raw.type,
+    vatPercentage: 0,
+    status: raw.status ?? '',
+    type: '',
     responsibleLawyerId: raw.solicitor?._id ?? null,
     responsibleLawyerName: raw.solicitor?.name ?? null,
     matterId: raw.matter?._id ?? null,
@@ -199,11 +205,11 @@ export function transformInvoice(raw: YaoInvoice): NormalisedInvoice {
     clientIds: raw.clients?.map((c) => c._id) ?? [],
     clientNames: raw.clients?.map((c) => c.display_name) ?? [],
     datePaid: null, // populated later in enrichment from ledger records
-    narrative: raw.narrative ?? null,
-    reference: raw.reference ?? null,
-    integrationId: raw.integration_id ?? null,
-    createdAt: raw.created_at,
-    updatedAt: raw.updated_at,
+    narrative: null,
+    reference: null,
+    integrationId: null,
+    createdAt: '',
+    updatedAt: '',
   };
 }
 
@@ -213,7 +219,8 @@ export function transformDisbursement(raw: YaoLedger): NormalisedDisbursement {
     type: raw.type,
     subtotal: Math.abs(raw.value),
     vatAmount: Math.abs(raw.vat),
-    vatPercentage: raw.vat_percentage,
+    // vat_percentage, created_at, updated_at not in LEDGER_KEEP_FIELDS
+    vatPercentage: 0,
     outstanding: raw.outstanding,
     firmExposure: raw.outstanding < 0 ? Math.abs(raw.outstanding) : 0,
     isRecovered: raw.outstanding === 0,
@@ -221,11 +228,11 @@ export function transformDisbursement(raw: YaoLedger): NormalisedDisbursement {
     supplierId: raw.payee ?? null,
     matterId: raw.matter?._id ?? null,
     matterNumber: raw.matter?.number ?? null,
-    responsibleLawyerId: raw.author?._id ?? null,
-    responsibleLawyerName: raw.author?.name ?? null,
+    responsibleLawyerId: raw.responsible_lawyer?._id ?? null,
+    responsibleLawyerName: null, // responsible_lawyer on ledger only has _id
     date: raw.date,
-    createdAt: raw.created_at,
-    updatedAt: raw.updated_at,
+    createdAt: '',
+    updatedAt: '',
   };
 }
 
@@ -240,12 +247,14 @@ export function transformTask(raw: YaoTask): NormalisedTask {
     title: raw.title,
     priority: raw.priority,
     status: raw.status,
-    category: raw.category ?? null,
+    // category, completed_date, description, estimate_time, notify_flag,
+    // created_at, updated_at not in TASK_KEEP_FIELDS
+    category: null,
     dueDate: raw.due_date ?? null,
-    completedDate: raw.completed_date ?? null,
-    description: raw.description ?? null,
-    estimateTime: raw.estimate_time ?? null,
-    notifyFlag: raw.notify_flag,
+    completedDate: null,
+    description: null,
+    estimateTime: null,
+    notifyFlag: false,
     isOverdue,
     lawyerId: raw.assigned_to?._id ?? null,
     lawyerName: raw.assigned_to
@@ -253,8 +262,8 @@ export function transformTask(raw: YaoTask): NormalisedTask {
       : null,
     matterId: raw.matter?._id ?? null,
     matterNumber: raw.matter?.number ?? null,
-    createdAt: raw.created_at,
-    updatedAt: raw.updated_at,
+    createdAt: '',
+    updatedAt: '',
   };
 }
 
@@ -264,16 +273,18 @@ export function transformContact(raw: YaoContact): NormalisedContact {
     type: raw.type,
     displayName: raw.display_name,
     isCompany: raw.type === 'Company',
-    firstName: raw.first_name ?? null,
-    middleName: raw.middle_name ?? null,
-    lastName: raw.last_name ?? null,
+    // first_name, middle_name, last_name, email, mobile_phone, work_phone,
+    // tags, is_archived, law_firm, created_at, updated_at not in CONTACT_KEEP_FIELDS
+    firstName: null,
+    middleName: null,
+    lastName: null,
     companyName: raw.company_name ?? null,
-    primaryEmail: raw.email ?? null,
-    primaryPhone: raw.mobile_phone ?? raw.work_phone ?? null,
-    tags: raw.tags ?? [],
-    isArchived: raw.is_archived,
-    lawFirm: raw.law_firm,
-    createdAt: raw.created_at,
-    updatedAt: raw.updated_at,
+    primaryEmail: null,
+    primaryPhone: null,
+    tags: [],
+    isArchived: false,
+    lawFirm: '',
+    createdAt: '',
+    updatedAt: '',
   };
 }

@@ -541,7 +541,6 @@ describe('Test 2: sensitive fields stripped from attorney records', () => {
     const attorneys = await adapter.fetchAttorneys();
 
     expect(attorneys[0].rates).toHaveLength(2);
-    expect(attorneys[0].email).toBe('jane@testfirm.com');
     expect(attorneys[0].status).toBe('ACTIVE');
   });
 });

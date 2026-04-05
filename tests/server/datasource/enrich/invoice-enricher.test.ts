@@ -58,16 +58,9 @@ function makeLedger(o: Partial<YaoLedger> = {}): YaoLedger {
     type: 'CLIENT_TO_OFFICE',
     value: 1000,
     vat: 0,
-    vat_percentage: 0,
-    subtotal: 1000,
     outstanding: 0,
-    paid: 1000,
-    status: 'ACTIVE',
     date: '2024-03-15',
-    law_firm: 'firm-1',
     invoice: 'inv-1',
-    created_at: '2024-03-15T00:00:00Z',
-    updated_at: '2024-03-15T00:00:00Z',
     ...o,
   };
 }

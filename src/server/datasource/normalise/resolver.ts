@@ -29,7 +29,6 @@ export interface ResolutionStats {
   timeEntries: {
     lawyerRate: number;
     lawyerStatus: number;
-    lawyerIntegrationId: number;
     total: number;
   };
   matters: {
@@ -78,10 +77,7 @@ export function resolveTimeEntryEnrichment(
     if (stats) { stats.lawyerStatus++; changed = true; }
   }
 
-  if (entry.lawyerIntegrationId === null && attorney.integrationAccountId !== null) {
-    patch.lawyerIntegrationId = attorney.integrationAccountId;
-    if (stats) { stats.lawyerIntegrationId++; changed = true; }
-  }
+  // integrationAccountId removed from ATTORNEY_KEEP_FIELDS — lawyerIntegrationId stays null
 
   if (!changed && Object.keys(patch).length === 0) return entry;
 
@@ -194,7 +190,7 @@ type ResolveAllInput = {
  */
 export function resolveAll(data: ResolveAllInput, maps: LookupMaps): ResolveAllInput {
   const stats: ResolutionStats = {
-    timeEntries: { lawyerRate: 0, lawyerStatus: 0, lawyerIntegrationId: 0, total: 0 },
+    timeEntries: { lawyerRate: 0, lawyerStatus: 0, total: 0 },
     matters: {
       departmentName: 0, caseTypeName: 0,
       responsibleLawyerName: 0, responsibleLawyerRate: 0,
@@ -217,8 +213,7 @@ export function resolveAll(data: ResolveAllInput, maps: LookupMaps): ResolveAllI
   console.log(
     '[resolver] Resolution complete —' +
       ` timeEntries: ${stats.timeEntries.total} enriched` +
-      ` (rate: ${stats.timeEntries.lawyerRate}, status: ${stats.timeEntries.lawyerStatus}` +
-      `, integrationId: ${stats.timeEntries.lawyerIntegrationId})` +
+      ` (rate: ${stats.timeEntries.lawyerRate}, status: ${stats.timeEntries.lawyerStatus})` +
       ` | matters: ${stats.matters.total} enriched` +
       ` (deptName: ${stats.matters.departmentName}, caseTypeName: ${stats.matters.caseTypeName}` +
       `, lawyerName: ${stats.matters.responsibleLawyerName})` +

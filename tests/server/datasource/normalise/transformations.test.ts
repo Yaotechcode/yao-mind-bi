@@ -29,9 +29,9 @@ const MAPS: LookupMaps = {
   attorneyMap: {
     'att-1': {
       fullName: 'Alice Smith', firstName: 'Alice', lastName: 'Smith',
-      email: 'alice@firm.com', status: 'ACTIVE', defaultRate: 250,
+      status: 'ACTIVE', defaultRate: 250,
       allRates: [{ label: 'Standard', value: 250, default: true }],
-      integrationAccountId: null, integrationAccountCode: null, jobTitle: null,
+      jobTitle: null,
     },
   },
   departmentMap: { 'dept-1': 'Conveyancing' },
@@ -50,9 +50,7 @@ const MAPS: LookupMaps = {
 function makeAttorney(o: Partial<YaoAttorney> = {}): YaoAttorney {
   return {
     _id: 'att-1', name: 'Alice', surname: 'Smith', status: 'ACTIVE',
-    email: 'alice@firm.com', law_firm: 'firm-1',
     rates: [{ label: 'Standard', value: 250, default: true }],
-    created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z',
     ...o,
   };
 }
@@ -60,22 +58,19 @@ function makeAttorney(o: Partial<YaoAttorney> = {}): YaoAttorney {
 function makeMatter(o: Partial<YaoMatter> = {}): YaoMatter {
   return {
     _id: 'matter-1', number: 1001, status: 'IN_PROGRESS',
-    case_name: 'Smith v Jones', financial_limit: 5000, rate: null,
-    client_account_balance: 0, office_account_balance: 0, linked_account_balance: 0,
+    case_name: 'Smith v Jones', financial_limit: 5000,
+    office_account_balance: 0,
     clients: [{ contact: { _id: 'c-1', type: 'Person', display_name: 'Alice Smith' } }],
-    case_contacts: [], created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z',
-    law_firm: { _id: 'firm-1', name: 'Acme Law' },
+    created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z',
     ...o,
   };
 }
 
 function makeTimeEntry(o: Partial<YaoTimeEntry> = {}): YaoTimeEntry {
   return {
-    _id: 'te-1', description: 'Drafting', do_not_bill: false, rate: 250,
-    units: 6, duration_minutes: 30, billable: 125, write_off: 0,
-    status: 'ACTIVE', date: '2024-03-01',
-    matter: { _id: 'matter-1', number: 1001, case_name: 'Smith v Jones', law_firm: 'firm-1' },
-    created_at: '2024-03-01T00:00:00Z', updated_at: '2024-03-01T00:00:00Z',
+    _id: 'te-1', do_not_bill: false, duration_minutes: 30, billable: 125, write_off: 0,
+    date: '2024-03-01',
+    matter: { _id: 'matter-1', number: 1001 },
     ...o,
   };
 }
@@ -83,13 +78,11 @@ function makeTimeEntry(o: Partial<YaoTimeEntry> = {}): YaoTimeEntry {
 function makeInvoice(o: Partial<YaoInvoice> = {}): YaoInvoice {
   return {
     _id: 'inv-1', invoice_number: 101, invoice_date: '2024-03-01', due_date: '2024-04-01',
-    subtotal: 1000, total_disbursements: 0, total_other_fees: 0, total_firm_fees: 1000,
+    subtotal: 1000, total_firm_fees: 1000,
     write_off: 0, total: 1200, outstanding: 1200, paid: 0,
-    credited: 0, written_off: 0, vat: 200, vat_percentage: 20,
-    less_paid_on_account: 0, billable_entries: 4, time_entries_override_value: 0,
-    status: 'ISSUED', type: 'TAX',
+    written_off: 0, vat: 200,
+    status: 'ISSUED',
     clients: [{ _id: 'c-1', display_name: 'Alice Smith' }],
-    created_at: '2024-03-01T00:00:00Z', updated_at: '2024-03-01T00:00:00Z',
     ...o,
   };
 }
@@ -97,10 +90,8 @@ function makeInvoice(o: Partial<YaoInvoice> = {}): YaoInvoice {
 function makeLedger(o: Partial<YaoLedger> = {}): YaoLedger {
   return {
     _id: 'ledger-1', type: 'OFFICE_PAYMENT', value: -500,
-    vat: 0, vat_percentage: 0, subtotal: 500,
-    outstanding: -500, paid: 0, status: 'UNPAID',
-    date: '2024-03-01', law_firm: 'firm-1',
-    created_at: '2024-03-01T00:00:00Z', updated_at: '2024-03-01T00:00:00Z',
+    vat: 0, outstanding: -500,
+    date: '2024-03-01',
     ...o,
   };
 }
@@ -108,8 +99,7 @@ function makeLedger(o: Partial<YaoLedger> = {}): YaoLedger {
 function makeTask(o: Partial<YaoTask> = {}): YaoTask {
   return {
     _id: 'task-1', title: 'Review contract', priority: 'MEDIUM',
-    status: 'TO_DO', notify_flag: false,
-    created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z',
+    status: 'TO_DO',
     ...o,
   };
 }
@@ -117,8 +107,6 @@ function makeTask(o: Partial<YaoTask> = {}): YaoTask {
 function makeContact(o: Partial<YaoContact> = {}): YaoContact {
   return {
     _id: 'contact-1', type: 'Person', display_name: 'Alice Smith',
-    first_name: 'Alice', last_name: 'Smith', is_archived: false,
-    law_firm: 'firm-1', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z',
     ...o,
   };
 }
@@ -159,12 +147,14 @@ describe('transformAttorney()', () => {
     expect(result.defaultRate).toBeNull();
   });
 
-  it('maps optional fields to null when absent', () => {
-    const result = transformAttorney(makeAttorney({
-      job_title: undefined, phone: undefined,
-      integration_account_id: undefined, integration_account_code: undefined,
-    }));
+  it('maps optional jobTitle to null when absent', () => {
+    const result = transformAttorney(makeAttorney({ job_title: undefined }));
     expect(result.jobTitle).toBeNull();
+  });
+
+  it('email, phone, integrationAccountId always null (not in keep list)', () => {
+    const result = transformAttorney(makeAttorney());
+    expect(result.email).toBe('');
     expect(result.phone).toBeNull();
     expect(result.integrationAccountId).toBeNull();
     expect(result.integrationAccountCode).toBeNull();
@@ -317,17 +307,9 @@ describe('transformMatter()', () => {
     expect(result.clientIds).toEqual([]);
   });
 
-  it('extracts lawFirmId from object law_firm', () => {
-    const result = transformMatter(
-      makeMatter({ law_firm: { _id: 'firm-1', name: 'Acme Law' } }),
-      MAPS,
-    );
-    expect(result.lawFirmId).toBe('firm-1');
-  });
-
-  it('uses string law_firm directly', () => {
-    const result = transformMatter(makeMatter({ law_firm: 'firm-string-id' }), MAPS);
-    expect(result.lawFirmId).toBe('firm-string-id');
+  it('lawFirmId is empty string (law_firm not in keep list)', () => {
+    const result = transformMatter(makeMatter(), MAPS);
+    expect(result.lawFirmId).toBe('');
   });
 });
 
@@ -602,39 +584,31 @@ describe('transformContact()', () => {
     expect(transformContact(makeContact({ type: 'Person' })).isCompany).toBe(false);
   });
 
-  it('prefers mobile_phone over work_phone for primaryPhone', () => {
-    const result = transformContact(makeContact({ mobile_phone: '07700900000', work_phone: '02071234567' }));
-    expect(result.primaryPhone).toBe('07700900000');
+  it('primaryPhone always null (mobile_phone/work_phone not in keep list)', () => {
+    expect(transformContact(makeContact()).primaryPhone).toBeNull();
   });
 
-  it('falls back to work_phone when mobile_phone absent', () => {
-    const result = transformContact(makeContact({ mobile_phone: undefined, work_phone: '02071234567' }));
-    expect(result.primaryPhone).toBe('02071234567');
+  it('primaryEmail always null (email not in keep list)', () => {
+    expect(transformContact(makeContact()).primaryEmail).toBeNull();
   });
 
-  it('returns null primaryPhone when both absent', () => {
-    const result = transformContact(makeContact({ mobile_phone: undefined, work_phone: undefined }));
-    expect(result.primaryPhone).toBeNull();
+  it('tags always empty array (tags not in keep list)', () => {
+    expect(transformContact(makeContact()).tags).toEqual([]);
   });
 
-  it('returns null primaryEmail when email absent', () => {
-    const result = transformContact(makeContact({ email: undefined }));
-    expect(result.primaryEmail).toBeNull();
-  });
-
-  it('maps tags to empty array when absent', () => {
-    const result = transformContact(makeContact({ tags: undefined }));
-    expect(result.tags).toEqual([]);
-  });
-
-  it('maps all name fields to null when absent', () => {
-    const result = transformContact(makeContact({
-      first_name: undefined, middle_name: undefined, last_name: undefined, company_name: undefined,
-    }));
+  it('name fields always null (first_name etc not in keep list)', () => {
+    const result = transformContact(makeContact());
     expect(result.firstName).toBeNull();
     expect(result.middleName).toBeNull();
     expect(result.lastName).toBeNull();
-    expect(result.companyName).toBeNull();
+  });
+
+  it('companyName from company_name when present', () => {
+    expect(transformContact(makeContact({ company_name: 'Acme Ltd' })).companyName).toBe('Acme Ltd');
+  });
+
+  it('companyName null when absent', () => {
+    expect(transformContact(makeContact({ company_name: undefined })).companyName).toBeNull();
   });
 
   it('maps contactId from _id', () => {

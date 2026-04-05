@@ -143,8 +143,8 @@ describe('fetchTimeEntries()', () => {
     }));
 
     const result = await adapter.fetchTimeEntries();
+    // status is not in TIME_ENTRY_KEEP_FIELDS — only count is checkable
     expect(result).toHaveLength(2);
-    expect(result.every((e) => e.status === 'ACTIVE')).toBe(true);
   });
 
   it('excludes CONSOLIDATION_TARGET entries', async () => {
@@ -217,12 +217,11 @@ describe('fetchTimeEntries()', () => {
     expect(result[0].activity == null).toBe(true);
   });
 
-  it('preserves all non-sensitive fields on entries', async () => {
+  it('preserves kept fields on entries', async () => {
     const adapter = await authenticatedAdapter();
     const entry = makeEntry({
       work_type: 'DRAFTING',
       activity: { _id: 'act-1', title: 'Drafting', measure: 'hours' },
-      invoice: 'inv-999',
       do_not_bill: true,
     });
     mockFetch.mockResolvedValueOnce(makeResponse({ result: [entry] }));
@@ -230,7 +229,8 @@ describe('fetchTimeEntries()', () => {
     const result = await adapter.fetchTimeEntries();
     expect(result[0].work_type).toBe('DRAFTING');
     expect(result[0].activity?.title).toBe('Drafting');
-    expect(result[0].invoice).toBe('inv-999');
     expect(result[0].do_not_bill).toBe(true);
+    // invoice not in TIME_ENTRY_KEEP_FIELDS — pruned
+    expect(result[0]).not.toHaveProperty('invoice');
   });
 });

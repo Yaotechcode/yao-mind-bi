@@ -123,22 +123,14 @@ describe('fetchMatters()', () => {
     expect(url).toContain('limit=50');
   });
 
-  it('handles law_firm as an object', async () => {
+  it('law_firm is pruned from returned matters', async () => {
     const adapter = await authenticatedAdapter();
     const matter = makeMatter({ law_firm: { _id: 'firm-1', name: 'Acme Law' } });
     mockFetch.mockResolvedValueOnce(makeResponse({ rows: [matter] }));
 
     const result = await adapter.fetchMatters();
-    expect(result[0].law_firm).toEqual({ _id: 'firm-1', name: 'Acme Law' });
-  });
-
-  it('handles law_firm as a string', async () => {
-    const adapter = await authenticatedAdapter();
-    const matter = makeMatter({ law_firm: 'firm-id-string' });
-    mockFetch.mockResolvedValueOnce(makeResponse({ rows: [matter] }));
-
-    const result = await adapter.fetchMatters();
-    expect(result[0].law_firm).toBe('firm-id-string');
+    // law_firm not in MATTER_KEEP_FIELDS — pruned at fetch time
+    expect(result[0]).not.toHaveProperty('law_firm');
   });
 
   it('strips password from nested responsible_lawyer', async () => {

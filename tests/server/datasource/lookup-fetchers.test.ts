@@ -43,10 +43,6 @@ function makeAttorney(overrides: Partial<YaoAttorney & { password?: string; emai
     name: 'Alice',
     surname: 'Smith',
     status: 'ACTIVE',
-    email: 'alice@firm.com',
-    law_firm: 'firm-1',
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-01T00:00:00Z',
     rates: [
       { label: 'Standard', value: 250, default: true },
       { label: 'Discounted', value: 200, default: false },
@@ -59,7 +55,6 @@ function makeDepartment(overrides: Partial<YaoDepartment> = {}): YaoDepartment {
   return {
     _id: 'dept-1',
     title: 'Conveyancing',
-    law_firm: 'firm-1',
     is_deleted: false,
     ...overrides,
   };
@@ -69,9 +64,8 @@ function makeCaseType(overrides: Partial<YaoCaseType> = {}): YaoCaseType {
   return {
     _id: 'ct-1',
     title: 'Residential Purchase',
-    law_firm: 'firm-1',
     fixed_fee: 0,
-    department: { _id: 'dept-1', title: 'Conveyancing', is_deleted: false },
+    department: { _id: 'dept-1', title: 'Conveyancing' },
     is_deleted: false,
     ...overrides,
   };
@@ -130,21 +124,6 @@ describe('buildAttorneyMap()', () => {
     expect(map['att-1'].defaultRate).toBeNull();
   });
 
-  it('maps integrationAccountId and integrationAccountCode', () => {
-    const adapter = new DataSourceAdapter('firm-1');
-    const map = adapter.buildAttorneyMap([
-      makeAttorney({ integration_account_id: 'IAI-99', integration_account_code: 'CODE-1' }),
-    ]);
-    expect(map['att-1'].integrationAccountId).toBe('IAI-99');
-    expect(map['att-1'].integrationAccountCode).toBe('CODE-1');
-  });
-
-  it('sets integrationAccountId to null when absent', () => {
-    const adapter = new DataSourceAdapter('firm-1');
-    const map = adapter.buildAttorneyMap([makeAttorney()]);
-    expect(map['att-1'].integrationAccountId).toBeNull();
-  });
-
   it('maps multiple attorneys by _id', () => {
     const adapter = new DataSourceAdapter('firm-1');
     const map = adapter.buildAttorneyMap([
@@ -184,7 +163,6 @@ describe('fetchAttorneys()', () => {
     mockFetch.mockResolvedValueOnce(makeResponse([makeAttorney()]));
     const attorneys = await adapter.fetchAttorneys();
     expect(attorneys[0]._id).toBe('att-1');
-    expect(attorneys[0].email).toBe('alice@firm.com');
     expect(attorneys[0].rates).toHaveLength(2);
   });
 });

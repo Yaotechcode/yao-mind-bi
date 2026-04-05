@@ -24,15 +24,15 @@ const MAPS: LookupMaps = {
   attorneyMap: {
     'att-1': {
       fullName: 'Alice Smith', firstName: 'Alice', lastName: 'Smith',
-      email: 'alice@firm.com', status: 'ACTIVE', defaultRate: 250,
+      status: 'ACTIVE', defaultRate: 250,
       allRates: [{ label: 'Standard', value: 250, default: true }],
-      integrationAccountId: 'IAI-99', integrationAccountCode: 'CODE-1', jobTitle: null,
+      jobTitle: null,
     },
     'att-2': {
       fullName: 'Bob Brown', firstName: 'Bob', lastName: 'Brown',
-      email: 'bob@firm.com', status: 'PENDING', defaultRate: null,
+      status: 'PENDING', defaultRate: null,
       allRates: [],
-      integrationAccountId: null, integrationAccountCode: null, jobTitle: null,
+      jobTitle: null,
     },
   },
   departmentMap: { 'dept-1': 'Conveyancing', 'dept-2': 'Litigation' },
@@ -137,10 +137,10 @@ describe('resolveTimeEntryEnrichment()', () => {
     expect(result.lawyerStatus).toBe('ACTIVE');
   });
 
-  it('fills lawyerIntegrationId from attorney map', () => {
+  it('leaves lawyerIntegrationId null (integration_account_id not in keep list)', () => {
     const entry = makeTimeEntry({ lawyerId: 'att-1' });
     const result = resolveTimeEntryEnrichment(entry, MAPS);
-    expect(result.lawyerIntegrationId).toBe('IAI-99');
+    expect(result.lawyerIntegrationId).toBeNull();
   });
 
   it('leaves lawyerDefaultRate null when attorney has no default rate', () => {
