@@ -276,36 +276,33 @@ export class PullOrchestrator {
       void caseTypes;
 
       // -----------------------------------------------------------------------
-      // Step 6b: Fetch ledgers (sequential — after non-ledger data is processed)
-      // Building archivedMatterIds allows the type+archived filter to skip
-      // archived-matter ledgers before accumulating them in memory.
+      // Step 6b: LEDGERS DISABLED — pending Yao API server-side type filtering
+      // Re-enable Step 6b once API supports types filter on POST /ledgers/search
       // -----------------------------------------------------------------------
-      const archivedMatterIds = new Set(
-        rawMatters
-          .filter((m) => m.status === 'ARCHIVED')
-          .map((m) => m._id),
-      );
-      await updatePullStage(firmId, 'Fetching ledgers');
-      const rawLedgersList = await adapter.fetchLedgers(dateFrom, archivedMatterIds);
-      const ledgers = adapter.routeLedgers(rawLedgersList);
-      stats.disbursements = ledgers.disbursements.length;
+      // const archivedMatterIds = new Set(
+      //   rawMatters.filter((m) => m.status === 'ARCHIVED').map((m) => m._id),
+      // );
+      // await updatePullStage(firmId, 'Fetching ledgers');
+      // const rawLedgersList = await adapter.fetchLedgers(dateFrom, archivedMatterIds);
+      // const ledgers = adapter.routeLedgers(rawLedgersList);
+      // stats.disbursements = ledgers.disbursements.length;
 
       // -----------------------------------------------------------------------
-      // Step 9b: Enrich invoices with datePaid + store invoices and disbursements
-      // safeInvoices is still in scope — kept small (normalised shape)
+      // Step 9b: Store invoices and client profiles
+      // datePaid enrichment and disbursements are disabled while ledgers are off.
       // -----------------------------------------------------------------------
-      const enrichedInvoices = enrichInvoicesWithDatePaid(safeInvoices, ledgers.invoicePayments);
-      const normDisbursements = ledgers.disbursements.map(transformDisbursement);
+      // const enrichedInvoices = enrichInvoicesWithDatePaid(safeInvoices, ledgers.invoicePayments);
+      // const normDisbursements = ledgers.disbursements.map(transformDisbursement);
+      // storeEnrichedEntities(firmId, 'disbursement', normDisbursements ...) — disabled with ledgers
 
-      const clientProfiles = buildClientProfiles(normContacts, safeMatters, enrichedInvoices);
+      const clientProfiles = buildClientProfiles(normContacts, safeMatters, safeInvoices);
 
       await Promise.all([
-        storeEnrichedEntities(firmId, 'invoice',      enrichedInvoices as unknown as Record<string, unknown>[],       [], undefined),
-        storeEnrichedEntities(firmId, 'disbursement', normDisbursements as unknown as Record<string, unknown>[],       [], undefined),
-        storeEnrichedEntities(firmId, 'client',       clientProfiles as unknown as Record<string, unknown>[],          [], undefined),
+        storeEnrichedEntities(firmId, 'invoice', safeInvoices as unknown as Record<string, unknown>[], [], undefined),
+        storeEnrichedEntities(firmId, 'client',  clientProfiles as unknown as Record<string, unknown>[], [], undefined),
       ]);
 
-      await updatePullStage(firmId, 'Fetching ledgers', { disbursements: stats.disbursements });
+      // await updatePullStage(firmId, 'Fetching ledgers', { disbursements: stats.disbursements }); // disabled with ledgers
 
       // -----------------------------------------------------------------------
       // Step 10: Calculate KPIs

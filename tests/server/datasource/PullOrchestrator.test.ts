@@ -256,11 +256,11 @@ describe('pull status stage tracking', () => {
     expect(stages).toContain('Fetching time entries, invoices, tasks, contacts');
   });
 
-  it('updates stage to Fetching ledgers', async () => {
+  it('does NOT update stage to Fetching ledgers (disabled pending API type filter)', async () => {
     const { orchestrator } = makeOrchestrator();
     await orchestrator.run();
     const stages = vi.mocked(pullStatus.updatePullStage).mock.calls.map((c) => c[1]);
-    expect(stages).toContain('Fetching ledgers');
+    expect(stages).not.toContain('Fetching ledgers');
   });
 
   it('updates stage to Normalising', async () => {

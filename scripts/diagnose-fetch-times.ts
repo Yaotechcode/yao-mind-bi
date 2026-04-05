@@ -95,10 +95,13 @@ async function main() {
   const matters = await timed('fetchMatters', () => adapter.fetchMatters());
   await timed('fetchTimeEntries', () => adapter.fetchTimeEntries(fromDate));
   await timed('fetchInvoices',   () => adapter.fetchInvoices(fromDate));
-  const archivedMatterIds = new Set(
-    matters.filter((m) => m.status === 'ARCHIVED').map((m) => m._id),
-  );
-  await timed('fetchLedgers',    () => adapter.fetchLedgers(fromDate, archivedMatterIds));
+  // LEDGERS DISABLED — pending Yao API server-side type filtering
+  // Re-enable once API supports types filter on POST /ledgers/search
+  // const archivedMatterIds = new Set(
+  //   matters.filter((m) => m.status === 'ARCHIVED').map((m) => m._id),
+  // );
+  // await timed('fetchLedgers', () => adapter.fetchLedgers(fromDate, archivedMatterIds));
+  void matters; // used by archivedMatterIds above when ledgers re-enabled
   await timed('fetchTasks',      () => adapter.fetchTasks());
   await timed('fetchContacts',   () => adapter.fetchContacts());
 

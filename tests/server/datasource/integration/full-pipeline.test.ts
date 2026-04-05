@@ -915,8 +915,8 @@ describe('Test 10: full PullOrchestrator.run() with mocked API', () => {
     expect(result.stats.invoices).toBe(1);
     expect(result.stats.tasks).toBe(1);
     expect(result.stats.contacts).toBe(1);
-    // 1 OFFICE_PAYMENT ledger → disbursements
-    expect(result.stats.disbursements).toBe(1);
+    // disbursements always 0 while ledger fetch is disabled
+    expect(result.stats.disbursements).toBe(0);
   });
 
   it('returns pulledAt as an ISO string', async () => {
