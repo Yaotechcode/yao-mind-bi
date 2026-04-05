@@ -1,7 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import {
   buildFeeEarnerMergeMap,
+  buildSurnameMergeMap,
+  buildUniqueApiSurnames,
+  normaliseName,
   mergeFeeEarnerData,
 } from '../../../../src/server/datasource/enrich/fee-earner-merger.js';
 
@@ -36,6 +39,7 @@ function makeCsvRecord(o: Record<string, unknown> = {}): Record<string, unknown>
   return {
     integration_account_id: 'integ-001',
     email: 'alice@firm.com',
+    name: 'Alice Smith',
     payModel: 'Salaried',
     annualSalary: 60000,
     monthlySalary: 5000,
@@ -51,6 +55,33 @@ function makeCsvRecord(o: Record<string, unknown> = {}): Record<string, unknown>
     ...o,
   };
 }
+
+// =============================================================================
+// normaliseName
+// =============================================================================
+
+describe('normaliseName()', () => {
+  it('lowercases and trims', () => {
+    expect(normaliseName('  Alice Smith  ')).toBe('alice smith');
+  });
+
+  it('collapses multiple spaces', () => {
+    expect(normaliseName('Alice   Smith')).toBe('alice smith');
+  });
+
+  it('strips (Disabled) suffix case-insensitively', () => {
+    expect(normaliseName('Alice Smith (Disabled)')).toBe('alice smith');
+    expect(normaliseName('Alice Smith (DISABLED)')).toBe('alice smith');
+  });
+
+  it('strips arbitrary parenthetical groups', () => {
+    expect(normaliseName('Alice Smith (Former)')).toBe('alice smith');
+  });
+
+  it('handles name with no parentheticals unchanged', () => {
+    expect(normaliseName('Nathaniel Colbran')).toBe('nathaniel colbran');
+  });
+});
 
 // =============================================================================
 // buildFeeEarnerMergeMap
@@ -78,6 +109,18 @@ describe('buildFeeEarnerMergeMap()', () => {
     expect(map.get('integ-001')).toBe(map.get('alice@firm.com'));
   });
 
+  it('indexes by normalised name key', () => {
+    const records = [makeCsvRecord({ name: 'Alice Smith', integration_account_id: '' })];
+    const map = buildFeeEarnerMergeMap(records);
+    expect(map.has('n:alice smith')).toBe(true);
+  });
+
+  it('normalises name key — strips parentheticals and lowercases', () => {
+    const records = [makeCsvRecord({ name: 'Alice Smith (Disabled)', integration_account_id: '' })];
+    const map = buildFeeEarnerMergeMap(records);
+    expect(map.has('n:alice smith')).toBe(true);
+  });
+
   it('skips empty integration_account_id strings', () => {
     const records = [makeCsvRecord({ integration_account_id: '' })];
     const map = buildFeeEarnerMergeMap(records);
@@ -92,6 +135,88 @@ describe('buildFeeEarnerMergeMap()', () => {
 
   it('handles empty input', () => {
     expect(buildFeeEarnerMergeMap([])).toEqual(new Map());
+  });
+});
+
+// =============================================================================
+// buildSurnameMergeMap
+// =============================================================================
+
+describe('buildSurnameMergeMap()', () => {
+  it('returns a map keyed by normalised surname', () => {
+    const records = [makeCsvRecord({ name: 'Alice Smith' })];
+    const map = buildSurnameMergeMap(records);
+    expect(map.has('smith')).toBe(true);
+  });
+
+  it('excludes surnames that appear more than once in CSV', () => {
+    const records = [
+      makeCsvRecord({ name: 'Alice Smith', integration_account_id: 'i1' }),
+      makeCsvRecord({ name: 'Bob Smith', integration_account_id: 'i2' }),
+    ];
+    const map = buildSurnameMergeMap(records);
+    expect(map.has('smith')).toBe(false);
+  });
+
+  it('includes unique surnames only', () => {
+    const records = [
+      makeCsvRecord({ name: 'Alice Smith', integration_account_id: 'i1' }),
+      makeCsvRecord({ name: 'Bob Jones', integration_account_id: 'i2' }),
+      makeCsvRecord({ name: 'Carol Jones', integration_account_id: 'i3' }),
+    ];
+    const map = buildSurnameMergeMap(records);
+    expect(map.has('smith')).toBe(true);
+    expect(map.has('jones')).toBe(false);
+  });
+
+  it('strips parentheticals from CSV name before extracting surname', () => {
+    const records = [makeCsvRecord({ name: 'Alice Smith (Disabled)' })];
+    const map = buildSurnameMergeMap(records);
+    expect(map.has('smith')).toBe(true);
+  });
+
+  it('returns empty map for empty input', () => {
+    expect(buildSurnameMergeMap([])).toEqual(new Map());
+  });
+});
+
+// =============================================================================
+// buildUniqueApiSurnames
+// =============================================================================
+
+describe('buildUniqueApiSurnames()', () => {
+  it('returns surnames that appear exactly once', () => {
+    const attorneys = [
+      makeAttorney({ lastName: 'Smith' }),
+      makeAttorney({ lastName: 'Jones' }),
+    ];
+    const unique = buildUniqueApiSurnames(attorneys);
+    expect(unique.has('smith')).toBe(true);
+    expect(unique.has('jones')).toBe(true);
+  });
+
+  it('excludes surnames shared by multiple attorneys', () => {
+    const attorneys = [
+      makeAttorney({ lastName: 'Smith', _id: 'a1' }),
+      makeAttorney({ lastName: 'Smith', _id: 'a2' }),
+      makeAttorney({ lastName: 'Jones', _id: 'a3' }),
+    ];
+    const unique = buildUniqueApiSurnames(attorneys);
+    expect(unique.has('smith')).toBe(false);
+    expect(unique.has('jones')).toBe(true);
+  });
+
+  it('normalises surnames before counting', () => {
+    const attorneys = [
+      makeAttorney({ lastName: 'Smith' }),
+      makeAttorney({ lastName: 'SMITH', _id: 'a2' }),
+    ];
+    const unique = buildUniqueApiSurnames(attorneys);
+    expect(unique.has('smith')).toBe(false);
+  });
+
+  it('returns empty set for empty input', () => {
+    expect(buildUniqueApiSurnames([])).toEqual(new Set());
   });
 });
 
@@ -173,6 +298,159 @@ describe('mergeFeeEarnerData() — email fallback', () => {
     const map = buildFeeEarnerMergeMap([csv]);
     const result = mergeFeeEarnerData(attorney, map);
     expect(result.csvDataPresent).toBe(true);
+  });
+});
+
+// =============================================================================
+// mergeFeeEarnerData — name match (strategy 3)
+// =============================================================================
+
+describe('mergeFeeEarnerData() — name match', () => {
+  it('matches when integrationAccountId and email are absent', () => {
+    const attorney = makeAttorney({
+      fullName: 'Alice Smith',
+      integrationAccountId: null,
+      email: null,
+    });
+    const csv = makeCsvRecord({
+      name: 'Alice Smith',
+      integration_account_id: undefined,
+      email: undefined,
+    });
+    const map = buildFeeEarnerMergeMap([csv]);
+    const result = mergeFeeEarnerData(attorney, map);
+    expect(result.csvDataPresent).toBe(true);
+    expect(result.annualSalary).toBe(60000);
+  });
+
+  it('name match is case-insensitive and whitespace-normalised', () => {
+    const attorney = makeAttorney({
+      fullName: 'ALICE  SMITH',
+      integrationAccountId: null,
+      email: null,
+    });
+    const csv = makeCsvRecord({
+      name: 'Alice Smith',
+      integration_account_id: undefined,
+      email: undefined,
+    });
+    const map = buildFeeEarnerMergeMap([csv]);
+    const result = mergeFeeEarnerData(attorney, map);
+    expect(result.csvDataPresent).toBe(true);
+  });
+
+  it('name match strips parentheticals from CSV name', () => {
+    const attorney = makeAttorney({
+      fullName: 'Alice Smith',
+      integrationAccountId: null,
+      email: null,
+    });
+    const csv = makeCsvRecord({
+      name: 'Alice Smith (Disabled)',
+      integration_account_id: undefined,
+      email: undefined,
+    });
+    const map = buildFeeEarnerMergeMap([csv]);
+    const result = mergeFeeEarnerData(attorney, map);
+    expect(result.csvDataPresent).toBe(true);
+  });
+
+  it('prefers name match over surname-only match', () => {
+    const attorney = makeAttorney({
+      fullName: 'Alice Smith',
+      lastName: 'Smith',
+      integrationAccountId: null,
+      email: null,
+    });
+    const csvFull = makeCsvRecord({ name: 'Alice Smith', integration_account_id: undefined, email: undefined, annualSalary: 60000 });
+    const csvOther = makeCsvRecord({ name: 'Bob Smith', integration_account_id: undefined, email: undefined, annualSalary: 99999 });
+    const map = buildFeeEarnerMergeMap([csvFull]);
+    const surnameMap = buildSurnameMergeMap([csvOther]); // csvOther has unique 'Smith' in this map
+    const uniqueApiSurnames = new Set(['smith']);
+    const result = mergeFeeEarnerData(attorney, map, surnameMap, uniqueApiSurnames);
+    // Should match by full name (60000), not by surname from surnameMap (99999)
+    expect(result.annualSalary).toBe(60000);
+  });
+});
+
+// =============================================================================
+// mergeFeeEarnerData — surname match (strategy 4)
+// =============================================================================
+
+describe('mergeFeeEarnerData() — surname match', () => {
+  it('matches by surname when all other strategies fail and surname is unique', () => {
+    const attorney = makeAttorney({
+      fullName: 'Nathaniel Colbran',
+      firstName: 'Nathaniel',
+      lastName: 'Colbran',
+      integrationAccountId: null,
+      email: null,
+    });
+    // CSV has a slightly different name format but unique surname
+    const csv = makeCsvRecord({
+      name: 'N Colbran',
+      integration_account_id: undefined,
+      email: undefined,
+      annualSalary: 75000,
+    });
+    const mergeMap = buildFeeEarnerMergeMap([csv]);
+    const surnameMap = buildSurnameMergeMap([csv]);
+    const uniqueApiSurnames = new Set(['colbran']);
+
+    const result = mergeFeeEarnerData(attorney, mergeMap, surnameMap, uniqueApiSurnames);
+    expect(result.csvDataPresent).toBe(true);
+    expect(result.annualSalary).toBe(75000);
+  });
+
+  it('does NOT match by surname when surname is not unique in API list', () => {
+    const attorney = makeAttorney({
+      fullName: 'Alice Smith',
+      lastName: 'Smith',
+      integrationAccountId: null,
+      email: null,
+    });
+    const csv = makeCsvRecord({ name: 'Alice Smith', integration_account_id: undefined, email: undefined });
+    const mergeMap = buildFeeEarnerMergeMap([]); // no name key — force to surname path
+    const surnameMap = buildSurnameMergeMap([csv]);
+    // 'smith' not in uniqueApiSurnames — two attorneys share it
+    const uniqueApiSurnames = new Set<string>(); // smith excluded
+
+    const result = mergeFeeEarnerData(attorney, mergeMap, surnameMap, uniqueApiSurnames);
+    expect(result.csvDataPresent).toBe(false);
+  });
+
+  it('does NOT match by surname when surname appears more than once in CSV', () => {
+    const attorney = makeAttorney({
+      fullName: 'Alice Smith',
+      lastName: 'Smith',
+      integrationAccountId: null,
+      email: null,
+    });
+    const csv1 = makeCsvRecord({ name: 'Alice Smith', integration_account_id: undefined, email: undefined });
+    const csv2 = makeCsvRecord({ name: 'Bob Smith', integration_account_id: undefined, email: undefined });
+    const mergeMap = buildFeeEarnerMergeMap([]);
+    const surnameMap = buildSurnameMergeMap([csv1, csv2]); // 'smith' excluded as ambiguous
+    const uniqueApiSurnames = new Set(['smith']);
+
+    const result = mergeFeeEarnerData(attorney, mergeMap, surnameMap, uniqueApiSurnames);
+    expect(result.csvDataPresent).toBe(false);
+  });
+
+  it('surname match is case-insensitive', () => {
+    const attorney = makeAttorney({
+      fullName: 'Alice SMITH',
+      lastName: 'SMITH',
+      integrationAccountId: null,
+      email: null,
+    });
+    const csv = makeCsvRecord({ name: 'Alice Smith', integration_account_id: undefined, email: undefined, annualSalary: 60000 });
+    const mergeMap = buildFeeEarnerMergeMap([]);
+    const surnameMap = buildSurnameMergeMap([csv]);
+    const uniqueApiSurnames = new Set(['smith']); // normalised
+
+    const result = mergeFeeEarnerData(attorney, mergeMap, surnameMap, uniqueApiSurnames);
+    expect(result.csvDataPresent).toBe(true);
+    expect(result.annualSalary).toBe(60000);
   });
 });
 
@@ -279,7 +557,7 @@ describe('multiple attorneys', () => {
     const attorneys = [
       makeAttorney({ _id: 'att-1', integrationAccountId: 'integ-001', email: 'alice@firm.com' }),
       makeAttorney({ _id: 'att-2', integrationAccountId: 'integ-002', email: 'bob@firm.com' }),
-      makeAttorney({ _id: 'att-3', integrationAccountId: null, email: 'carol@firm.com' }),
+      makeAttorney({ _id: 'att-3', fullName: 'Carol White', firstName: 'Carol', lastName: 'White', integrationAccountId: null, email: 'carol@firm.com' }),
     ];
     const csvRecords = [
       makeCsvRecord({ integration_account_id: 'integ-001', annualSalary: 60000 }),
