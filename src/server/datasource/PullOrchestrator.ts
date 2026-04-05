@@ -184,71 +184,33 @@ export class PullOrchestrator {
       await updatePullStage(firmId, 'Fetching matters', { matters: rawMatters.length });
 
       // -----------------------------------------------------------------------
-      // Step 6a: Fetch non-ledger transactional data in parallel
+      // Step 6a: Sequential fetch-process-store per entity
+      // Peak memory: one large dataset in memory at a time.
+      // Each entity's raw data goes out of scope before the next fetch begins.
       // -----------------------------------------------------------------------
-      await updatePullStage(
-        firmId,
-        'Fetching time entries, invoices, tasks, contacts',
+
+      // --- 6a-1: Process matters + fee earners (matters already fetched in Step 5)
+      // safeMatters kept in outer scope — needed for client profiles in 6a-5
+      // -----------------------------------------------------------------------
+      await updatePullStage(firmId, 'Processing matters');
+
+      const normAttorneys = stripSensitiveFromArray(attorneys.map(transformAttorney));
+      const safeMatters   = stripSensitiveFromArray(
+        resolveAll(
+          {
+            matters:       stripSensitiveFromArray(rawMatters.map((m) => transformMatter(m, maps))),
+            timeEntries:   [],
+            invoices:      [],
+            disbursements: [],
+            tasks:         [],
+          },
+          maps,
+        ).matters,
       );
-      const [rawTimeEntries, rawInvoices, rawTasks, rawContacts] =
-        await Promise.all([
-          adapter.fetchTimeEntries(dateFrom),
-          adapter.fetchInvoices(dateFrom),
-          adapter.fetchTasks(),
-          adapter.fetchContacts(),
-        ]);
-      stats.timeEntries = rawTimeEntries.length;
-      stats.invoices    = rawInvoices.length;
-      stats.tasks       = rawTasks.length;
-      stats.contacts    = rawContacts.length;
+      // rawMatters no longer referenced after this point
 
-      // Collect any non-fatal warnings from the adapter (e.g. early pagination stop)
-      warnings.push(...adapter.getWarnings());
-
-      await updatePullStage(firmId, 'Fetching time entries, invoices, tasks, contacts', {
-        matters:     stats.matters,
-        timeEntries: stats.timeEntries,
-        invoices:    stats.invoices,
-        tasks:       stats.tasks,
-        contacts:    stats.contacts,
-      });
-
-      // -----------------------------------------------------------------------
-      // Step 7: Normalise + resolve + strip (non-ledger entities)
-      // -----------------------------------------------------------------------
-      await updatePullStage(firmId, 'Normalising');
-
-      // Transform raw → normalised
-      const normAttorneys   = stripSensitiveFromArray(attorneys.map(transformAttorney));
-      const normMatters     = stripSensitiveFromArray(rawMatters.map((m) => transformMatter(m, maps)));
-      const normTimeEntries = rawTimeEntries.map(transformTimeEntry);
-      const normInvoices    = rawInvoices.map(transformInvoice);
-      const normTasks       = rawTasks.map(transformTask);
-      const normContacts    = rawContacts.map(transformContact);
-
-      // Resolve map lookups (names, rates, department names)
-      const resolved = resolveAll(
-        {
-          matters:       normMatters,
-          timeEntries:   normTimeEntries,
-          invoices:      normInvoices,
-          disbursements: [],
-          tasks:         normTasks,
-        },
-        maps,
-      );
-
-      // Belt-and-suspenders: strip sensitive fields again after resolution
-      const safeMatters     = stripSensitiveFromArray(resolved.matters);
-      const safeTimeEntries = stripSensitiveFromArray(resolved.timeEntries);
-      const safeInvoices    = stripSensitiveFromArray(resolved.invoices);
-
-      // -----------------------------------------------------------------------
-      // Step 8: Enrich (non-ledger entities)
-      // -----------------------------------------------------------------------
-      await updatePullStage(firmId, 'Enriching');
-
-      const wipEnrichment = buildWipEnrichment(safeTimeEntries);
+      void departments; // stored via maps, not as enriched entity
+      void caseTypes;
 
       let enrichedFeeEarners = normAttorneys;
       try {
@@ -258,22 +220,114 @@ export class PullOrchestrator {
         warnings.push(`Fee earner CSV merge skipped: ${msg}`);
       }
 
-      // -----------------------------------------------------------------------
-      // Step 9a: Store non-invoice entities
-      // rawTimeEntries, rawTasks, rawContacts are eligible for GC after this point
-      // -----------------------------------------------------------------------
-      await updatePullStage(firmId, 'Storing enriched data');
-
       await Promise.all([
-        storeEnrichedEntities(firmId, 'feeEarner',  enrichedFeeEarners as unknown as Record<string, unknown>[],  [], undefined),
-        storeEnrichedEntities(firmId, 'matter',     safeMatters as unknown as Record<string, unknown>[],         [], undefined),
-        storeEnrichedEntities(firmId, 'timeEntry',  safeTimeEntries as unknown as Record<string, unknown>[],     [], undefined),
-        storeEnrichedEntities(firmId, 'task',       resolved.tasks as unknown as Record<string, unknown>[],      [], undefined),
-        storeEnrichedEntities(firmId, 'wip',        [wipEnrichment as unknown as Record<string, unknown>],       [], undefined),
+        storeEnrichedEntities(firmId, 'feeEarner', enrichedFeeEarners as unknown as Record<string, unknown>[], [], undefined),
+        storeEnrichedEntities(firmId, 'matter',    safeMatters as unknown as Record<string, unknown>[], [], undefined),
       ]);
 
-      void departments; // fetched as part of lookup tables — stored via maps, not as enriched entity
-      void caseTypes;
+      // --- 6a-2: Time entries — fetch, normalise, enrich (WIP), store, release
+      // rawTimeEntries and safeTimeEntries released at end of block
+      // -----------------------------------------------------------------------
+      await updatePullStage(firmId, 'Fetching time entries');
+      {
+        const rawTimeEntries  = await adapter.fetchTimeEntries(dateFrom);
+        stats.timeEntries     = rawTimeEntries.length;
+        const safeTimeEntries = stripSensitiveFromArray(
+          resolveAll(
+            {
+              matters:       [],
+              timeEntries:   rawTimeEntries.map(transformTimeEntry),
+              invoices:      [],
+              disbursements: [],
+              tasks:         [],
+            },
+            maps,
+          ).timeEntries,
+        );
+        const wipEnrichment = buildWipEnrichment(safeTimeEntries);
+        await Promise.all([
+          storeEnrichedEntities(firmId, 'timeEntry', safeTimeEntries as unknown as Record<string, unknown>[], [], undefined),
+          storeEnrichedEntities(firmId, 'wip',       [wipEnrichment as unknown as Record<string, unknown>],   [], undefined),
+        ]);
+      }
+      await updatePullStage(firmId, 'Fetching time entries', {
+        matters:     stats.matters,
+        timeEntries: stats.timeEntries,
+      });
+
+      // --- 6a-3: Invoices — fetch, normalise, store
+      // safeInvoices kept in outer scope — needed for client profiles in 6a-5
+      // -----------------------------------------------------------------------
+      await updatePullStage(firmId, 'Fetching invoices');
+      const rawInvoices  = await adapter.fetchInvoices(dateFrom);
+      stats.invoices     = rawInvoices.length;
+      const safeInvoices = stripSensitiveFromArray(
+        resolveAll(
+          {
+            matters:       [],
+            timeEntries:   [],
+            invoices:      rawInvoices.map(transformInvoice),
+            disbursements: [],
+            tasks:         [],
+          },
+          maps,
+        ).invoices,
+      );
+      await storeEnrichedEntities(firmId, 'invoice', safeInvoices as unknown as Record<string, unknown>[], [], undefined);
+      // rawInvoices no longer referenced after this point
+      await updatePullStage(firmId, 'Fetching invoices', {
+        matters:     stats.matters,
+        timeEntries: stats.timeEntries,
+        invoices:    stats.invoices,
+      });
+
+      // --- 6a-4: Tasks — fetch, normalise, store, release
+      // rawTasks released at end of block
+      // -----------------------------------------------------------------------
+      await updatePullStage(firmId, 'Fetching tasks');
+      {
+        const rawTasks      = await adapter.fetchTasks();
+        stats.tasks         = rawTasks.length;
+        const resolvedTasks = resolveAll(
+          {
+            matters:       [],
+            timeEntries:   [],
+            invoices:      [],
+            disbursements: [],
+            tasks:         rawTasks.map(transformTask),
+          },
+          maps,
+        );
+        await storeEnrichedEntities(firmId, 'task', resolvedTasks.tasks as unknown as Record<string, unknown>[], [], undefined);
+      }
+      await updatePullStage(firmId, 'Fetching tasks', {
+        matters:     stats.matters,
+        timeEntries: stats.timeEntries,
+        invoices:    stats.invoices,
+        tasks:       stats.tasks,
+      });
+
+      // --- 6a-5: Contacts — fetch, build client profiles, store, release
+      // rawContacts and normContacts released at end of block
+      // safeMatters and safeInvoices consumed here
+      // -----------------------------------------------------------------------
+      await updatePullStage(firmId, 'Fetching contacts');
+      {
+        const rawContacts    = await adapter.fetchContacts();
+        stats.contacts       = rawContacts.length;
+        const normContacts   = rawContacts.map(transformContact);
+        const clientProfiles = buildClientProfiles(normContacts, safeMatters, safeInvoices);
+        await storeEnrichedEntities(firmId, 'client', clientProfiles as unknown as Record<string, unknown>[], [], undefined);
+      }
+      // Collect non-fatal adapter warnings (e.g. early pagination stop)
+      warnings.push(...adapter.getWarnings());
+      await updatePullStage(firmId, 'Fetching contacts', {
+        matters:     stats.matters,
+        timeEntries: stats.timeEntries,
+        invoices:    stats.invoices,
+        tasks:       stats.tasks,
+        contacts:    stats.contacts,
+      });
 
       // -----------------------------------------------------------------------
       // Step 6b: LEDGERS DISABLED — pending Yao API server-side type filtering
@@ -287,21 +341,7 @@ export class PullOrchestrator {
       // const ledgers = adapter.routeLedgers(rawLedgersList);
       // stats.disbursements = ledgers.disbursements.length;
 
-      // -----------------------------------------------------------------------
-      // Step 9b: Store invoices and client profiles
-      // datePaid enrichment and disbursements are disabled while ledgers are off.
-      // -----------------------------------------------------------------------
-      // const enrichedInvoices = enrichInvoicesWithDatePaid(safeInvoices, ledgers.invoicePayments);
-      // const normDisbursements = ledgers.disbursements.map(transformDisbursement);
-      // storeEnrichedEntities(firmId, 'disbursement', normDisbursements ...) — disabled with ledgers
-
-      const clientProfiles = buildClientProfiles(normContacts, safeMatters, safeInvoices);
-
-      await Promise.all([
-        storeEnrichedEntities(firmId, 'invoice', safeInvoices as unknown as Record<string, unknown>[], [], undefined),
-        storeEnrichedEntities(firmId, 'client',  clientProfiles as unknown as Record<string, unknown>[], [], undefined),
-      ]);
-
+      // (invoice store: 6a-3; client profiles store: 6a-5; disbursement store: disabled with ledgers)
       // await updatePullStage(firmId, 'Fetching ledgers', { disbursements: stats.disbursements }); // disabled with ledgers
 
       // -----------------------------------------------------------------------

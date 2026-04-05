@@ -249,11 +249,49 @@ describe('pull status stage tracking', () => {
     expect(stages).toContain('Fetching matters');
   });
 
-  it('updates stage to Fetching time entries, invoices, tasks, contacts', async () => {
+  it('updates stage to Processing matters', async () => {
     const { orchestrator } = makeOrchestrator();
     await orchestrator.run();
     const stages = vi.mocked(pullStatus.updatePullStage).mock.calls.map((c) => c[1]);
-    expect(stages).toContain('Fetching time entries, invoices, tasks, contacts');
+    expect(stages).toContain('Processing matters');
+  });
+
+  it('updates stage to Fetching time entries', async () => {
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.run();
+    const stages = vi.mocked(pullStatus.updatePullStage).mock.calls.map((c) => c[1]);
+    expect(stages).toContain('Fetching time entries');
+  });
+
+  it('updates stage to Fetching invoices', async () => {
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.run();
+    const stages = vi.mocked(pullStatus.updatePullStage).mock.calls.map((c) => c[1]);
+    expect(stages).toContain('Fetching invoices');
+  });
+
+  it('updates stage to Fetching tasks', async () => {
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.run();
+    const stages = vi.mocked(pullStatus.updatePullStage).mock.calls.map((c) => c[1]);
+    expect(stages).toContain('Fetching tasks');
+  });
+
+  it('updates stage to Fetching contacts', async () => {
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.run();
+    const stages = vi.mocked(pullStatus.updatePullStage).mock.calls.map((c) => c[1]);
+    expect(stages).toContain('Fetching contacts');
+  });
+
+  it('does NOT emit parallel fetch stage or old Normalising/Enriching/Storing stages', async () => {
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.run();
+    const stages = vi.mocked(pullStatus.updatePullStage).mock.calls.map((c) => c[1]);
+    expect(stages).not.toContain('Fetching time entries, invoices, tasks, contacts');
+    expect(stages).not.toContain('Normalising');
+    expect(stages).not.toContain('Enriching');
+    expect(stages).not.toContain('Storing enriched data');
   });
 
   it('does NOT update stage to Fetching ledgers (disabled pending API type filter)', async () => {
@@ -261,27 +299,6 @@ describe('pull status stage tracking', () => {
     await orchestrator.run();
     const stages = vi.mocked(pullStatus.updatePullStage).mock.calls.map((c) => c[1]);
     expect(stages).not.toContain('Fetching ledgers');
-  });
-
-  it('updates stage to Normalising', async () => {
-    const { orchestrator } = makeOrchestrator();
-    await orchestrator.run();
-    const stages = vi.mocked(pullStatus.updatePullStage).mock.calls.map((c) => c[1]);
-    expect(stages).toContain('Normalising');
-  });
-
-  it('updates stage to Enriching', async () => {
-    const { orchestrator } = makeOrchestrator();
-    await orchestrator.run();
-    const stages = vi.mocked(pullStatus.updatePullStage).mock.calls.map((c) => c[1]);
-    expect(stages).toContain('Enriching');
-  });
-
-  it('updates stage to Storing enriched data', async () => {
-    const { orchestrator } = makeOrchestrator();
-    await orchestrator.run();
-    const stages = vi.mocked(pullStatus.updatePullStage).mock.calls.map((c) => c[1]);
-    expect(stages).toContain('Storing enriched data');
   });
 
   it('updates stage to Calculating KPIs', async () => {
