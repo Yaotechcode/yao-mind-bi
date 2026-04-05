@@ -102,6 +102,25 @@ export async function writeKpiSnapshots(
   console.log(
     `[kpi-snapshot-service] Wrote ${insertedCount} KPI snapshot rows for firm ${firmId}`,
   );
+
+  // Verification: confirm rows are actually present in the table.
+  // This surfaces silent failures (e.g. wrong env key, RLS misconfiguration)
+  // that would otherwise only show up as missing dashboard data.
+  const { count, error: countError } = await db
+    .from('kpi_snapshots')
+    .select('*', { count: 'exact', head: true })
+    .eq('firm_id', firmId);
+
+  if (countError) {
+    console.warn(
+      `[kpi-snapshot-service] Verification count failed for firm ${firmId}: ${countError.message}`,
+    );
+  } else {
+    console.log(
+      `[kpi-snapshot-service] Verified ${count ?? 0} rows in kpi_snapshots for firm ${firmId}` +
+        (count !== insertedCount ? ` — WARNING: expected ${insertedCount}` : ''),
+    );
+  }
 }
 
 // =============================================================================
