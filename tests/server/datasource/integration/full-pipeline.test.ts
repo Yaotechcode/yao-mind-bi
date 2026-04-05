@@ -914,7 +914,8 @@ describe('Test 10: full PullOrchestrator.run() with mocked API', () => {
     expect(result.stats.timeEntries).toBe(1);
     expect(result.stats.invoices).toBe(1);
     expect(result.stats.tasks).toBe(1);
-    expect(result.stats.contacts).toBe(1);
+    // contacts always 0 while contacts fetch is disabled
+    expect(result.stats.contacts).toBe(0);
     // disbursements always 0 while ledger fetch is disabled
     expect(result.stats.disbursements).toBe(0);
   });

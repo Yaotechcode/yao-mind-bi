@@ -103,7 +103,9 @@ async function main() {
   // await timed('fetchLedgers', () => adapter.fetchLedgers(fromDate, archivedMatterIds));
   void matters; // used by archivedMatterIds above when ledgers re-enabled
   await timed('fetchTasks',      () => adapter.fetchTasks());
-  await timed('fetchContacts',   () => adapter.fetchContacts());
+  // CONTACTS DISABLED — client display names already available inline on matters/invoices
+  // Re-enable if standalone contact profiles are needed in a future phase
+  // await timed('fetchContacts', () => adapter.fetchContacts());
 
   const totalElapsed = ((Date.now() - totalStart) / 1000).toFixed(1);
 

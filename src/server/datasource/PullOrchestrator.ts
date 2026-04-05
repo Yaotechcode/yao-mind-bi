@@ -307,27 +307,21 @@ export class PullOrchestrator {
         tasks:       stats.tasks,
       });
 
-      // --- 6a-5: Contacts — fetch, build client profiles, store, release
-      // rawContacts and normContacts released at end of block
-      // safeMatters and safeInvoices consumed here
+      // --- 6a-5: CONTACTS DISABLED — client display names already available inline
+      // on matters.clients[].contact.display_name and invoices.clients[].display_name
+      // Re-enable if standalone contact profiles are needed in a future phase
       // -----------------------------------------------------------------------
-      await updatePullStage(firmId, 'Fetching contacts');
-      {
-        const rawContacts    = await adapter.fetchContacts();
-        stats.contacts       = rawContacts.length;
-        const normContacts   = rawContacts.map(transformContact);
-        const clientProfiles = buildClientProfiles(normContacts, safeMatters, safeInvoices);
-        await storeEnrichedEntities(firmId, 'client', clientProfiles as unknown as Record<string, unknown>[], [], undefined);
-      }
+      // await updatePullStage(firmId, 'Fetching contacts');
+      // {
+      //   const rawContacts    = await adapter.fetchContacts();
+      //   stats.contacts       = rawContacts.length;
+      //   const normContacts   = rawContacts.map(transformContact);
+      //   const clientProfiles = buildClientProfiles(normContacts, safeMatters, safeInvoices);
+      //   await storeEnrichedEntities(firmId, 'client', clientProfiles as unknown as Record<string, unknown>[], [], undefined);
+      // }
       // Collect non-fatal adapter warnings (e.g. early pagination stop)
       warnings.push(...adapter.getWarnings());
-      await updatePullStage(firmId, 'Fetching contacts', {
-        matters:     stats.matters,
-        timeEntries: stats.timeEntries,
-        invoices:    stats.invoices,
-        tasks:       stats.tasks,
-        contacts:    stats.contacts,
-      });
+      // await updatePullStage(firmId, 'Fetching contacts', { ... }); // disabled with contacts
 
       // -----------------------------------------------------------------------
       // Step 6b: LEDGERS DISABLED — pending Yao API server-side type filtering

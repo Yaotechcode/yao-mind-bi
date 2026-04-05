@@ -180,7 +180,8 @@ describe('happy path', () => {
     expect(result.stats.timeEntries).toBe(1);
     expect(result.stats.invoices).toBe(1);
     expect(result.stats.tasks).toBe(1);
-    expect(result.stats.contacts).toBe(1);
+    // contacts always 0 while contacts fetch is disabled
+    expect(result.stats.contacts).toBe(0);
   });
 
   it('errors array is empty on success', async () => {
@@ -277,11 +278,11 @@ describe('pull status stage tracking', () => {
     expect(stages).toContain('Fetching tasks');
   });
 
-  it('updates stage to Fetching contacts', async () => {
+  it('does NOT update stage to Fetching contacts (disabled — inline data used instead)', async () => {
     const { orchestrator } = makeOrchestrator();
     await orchestrator.run();
     const stages = vi.mocked(pullStatus.updatePullStage).mock.calls.map((c) => c[1]);
-    expect(stages).toContain('Fetching contacts');
+    expect(stages).not.toContain('Fetching contacts');
   });
 
   it('does NOT emit parallel fetch stage or old Normalising/Enriching/Storing stages', async () => {
