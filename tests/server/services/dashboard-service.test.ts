@@ -9,6 +9,10 @@ vi.mock('../../../src/server/services/config-service.js', () => ({
   getFirmConfig: vi.fn(),
 }));
 
+vi.mock('../../../src/server/services/kpi-snapshot-service.js', () => ({
+  getKpiSnapshots: vi.fn(),
+}));
+
 import {
   getFirmOverviewData,
   getFeeEarnerPerformanceData,
@@ -19,6 +23,8 @@ import {
 } from '../../../src/server/services/dashboard-service.js';
 import * as mongoOps from '../../../src/server/lib/mongodb-operations.js';
 import * as configService from '../../../src/server/services/config-service.js';
+import * as kpiSnapshotService from '../../../src/server/services/kpi-snapshot-service.js';
+import type { KpiSnapshotRow } from '../../../src/server/services/kpi-snapshot-service.js';
 
 const FIRM_ID = 'firm-test';
 
@@ -57,31 +63,37 @@ function makeMatter(overrides = {}) {
   };
 }
 
-function makeKpisDoc(overrides: Record<string, unknown> = {}) {
+function makeAggregate(overrides: Record<string, unknown> = {}) {
+  return {
+    feeEarners: [makeFeeEarner()],
+    matters: [makeMatter()],
+    clients: [{ contactId: 'c-1', displayName: 'Acme Corp', clientName: 'Acme Corp', matterCount: 1, activeMatterCount: 1, closedMatterCount: 0, totalWipValue: 2000, totalInvoiced: 1800, totalOutstanding: 300, totalPaid: 1550, oldestMatterDate: null }],
+    departments: [{ name: 'Property', feeEarnerCount: 1, activeFeeEarnerCount: 1, activeMatterCount: 1, totalMatterCount: 1, wipTotalHours: 20, wipChargeableHours: 18, wipChargeableValue: 2000, invoicedRevenue: 1800, invoicedOutstanding: 300 }],
+    firm: { feeEarnerCount: 1, activeFeeEarnerCount: 1, salariedFeeEarnerCount: 1, feeShareFeeEarnerCount: 0, matterCount: 1, activeMatterCount: 1, inProgressMatterCount: 1, completedMatterCount: 0, otherMatterCount: 0, totalWipHours: 120, totalChargeableHours: 90, totalWipValue: 12000, totalWriteOffValue: 500, totalInvoicedRevenue: 8000, totalOutstanding: 1500, totalPaid: 6500, orphanedWip: { orphanedWipEntryCount: 5, orphanedWipHours: 10, orphanedWipValue: 800, orphanedWipPercent: 6.7, orphanedWipNote: '' } },
+    dataQuality: { overallScore: 90, entityIssues: [], knownGaps: [] },
+    ...overrides,
+  };
+}
+
+/** Builds the object returned by getLatestEnrichedEntities(firmId, 'calculatedKpis') */
+function makeCalculatedKpisEntity(aggregateOverrides: Record<string, unknown> = {}) {
+  return { aggregate: makeAggregate(aggregateOverrides) } as never;
+}
+
+/** A minimal KpiSnapshotRow for use in tests. */
+function makeSnapshot(overrides: Partial<KpiSnapshotRow> = {}): KpiSnapshotRow {
   return {
     firm_id: FIRM_ID,
-    calculated_at: new Date('2024-06-01T12:00:00.000Z'),
-    config_version: '2024-01-01',
-    data_version: '2024-06-01',
-    kpis: {
-      aggregate: {
-        feeEarners: [makeFeeEarner()],
-        matters: [makeMatter()],
-        clients: [{ contactId: 'c-1', displayName: 'Acme Corp', clientName: 'Acme Corp', matterCount: 1, activeMatterCount: 1, closedMatterCount: 0, totalWipValue: 2000, totalInvoiced: 1800, totalOutstanding: 300, totalPaid: 1550, oldestMatterDate: null }],
-        departments: [{ name: 'Property', feeEarnerCount: 1, activeFeeEarnerCount: 1, activeMatterCount: 1, totalMatterCount: 1, wipTotalHours: 20, wipChargeableHours: 18, wipChargeableValue: 2000, invoicedRevenue: 1800, invoicedOutstanding: 300 }],
-        firm: { feeEarnerCount: 1, activeFeeEarnerCount: 1, salariedFeeEarnerCount: 1, feeShareFeeEarnerCount: 0, matterCount: 1, activeMatterCount: 1, inProgressMatterCount: 1, completedMatterCount: 0, otherMatterCount: 0, totalWipHours: 120, totalChargeableHours: 90, totalWipValue: 12000, totalWriteOffValue: 500, totalInvoicedRevenue: 8000, totalOutstanding: 1500, totalPaid: 6500, orphanedWip: { orphanedWipEntryCount: 5, orphanedWipHours: 10, orphanedWipValue: 800, orphanedWipPercent: 6.7, orphanedWipNote: '' } },
-        dataQuality: { overallScore: 90, entityIssues: [], knownGaps: [] },
-      },
-      formulaResults: {
-        'F-TU-01': { formulaId: 'F-TU-01', formulaName: 'Utilisation', variantUsed: null, resultType: 'percentage', entityResults: { 'l-1': { entityId: 'l-1', entityName: 'Alice', value: 75.5, formattedValue: '75.5%', nullReason: null } }, summary: { mean: 75.5, median: 75.5, min: 75.5, max: 75.5, total: 75.5, count: 1, nullCount: 0 }, computedAt: '2024-06-01T12:00:00.000Z', metadata: { executionTimeMs: 5, inputsUsed: [], nullReasons: [], warnings: [] } },
-      },
-      ragAssignments: {
-        'F-TU-01': { 'l-1': { status: 'green', value: 75.5, thresholdUsed: 'default', boundaries: { green: { min: 70 }, amber: { min: 50, max: 70 }, red: { max: 50 } }, distanceToNext: 4.5 } },
-      },
-      snippetResults: {},
-      calculationMetadata: { calculatedAt: '2024-06-01T12:00:00.000Z', totalExecutionTimeMs: 50 },
-      ...overrides,
-    },
+    pulled_at: '2024-06-01T12:00:00.000Z',
+    entity_type: 'feeEarner',
+    entity_id: 'l-1',
+    entity_name: 'Alice',
+    kpi_key: 'F-TU-01',
+    kpi_value: 75.5,
+    rag_status: 'green',
+    period: 'current',
+    display_value: '75.5%',
+    ...overrides,
   };
 }
 
@@ -90,8 +102,11 @@ function makeKpisDoc(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(configService.getFirmConfig).mockResolvedValue(makeFirmConfig() as never);
-  vi.mocked(mongoOps.getLatestCalculatedKpis).mockResolvedValue(makeKpisDoc() as never);
-  vi.mocked(mongoOps.getLatestEnrichedEntities).mockResolvedValue(null);
+  vi.mocked(mongoOps.getLatestEnrichedEntities).mockImplementation(async (_fid, entityType) => {
+    if (entityType === 'calculatedKpis') return makeCalculatedKpisEntity();
+    return null;
+  });
+  vi.mocked(kpiSnapshotService.getKpiSnapshots).mockResolvedValue([]);
 });
 
 // ── getFirmOverviewData ────────────────────────────────────────────────────
@@ -112,7 +127,10 @@ describe('getFirmOverviewData', () => {
     expect(result.dataQuality).toBeDefined();
   });
 
-  it('sets lastCalculated from kpisDoc.calculated_at', async () => {
+  it('sets lastCalculated from pulled_at in kpi_snapshots', async () => {
+    vi.mocked(kpiSnapshotService.getKpiSnapshots).mockResolvedValue([
+      makeSnapshot({ entity_type: 'feeEarner', pulled_at: '2024-06-01T12:00:00.000Z' }),
+    ]);
     const result = await getFirmOverviewData(FIRM_ID);
     expect(result.lastCalculated).toBe('2024-06-01T12:00:00.000Z');
   });
@@ -122,24 +140,26 @@ describe('getFirmOverviewData', () => {
     expect(result.kpiCards.totalUnbilledWip.value).toBe(12000);
   });
 
-  it('reads utilisation RAG from ragAssignments', async () => {
+  it('reads utilisation RAG from feeEarner kpi_snapshots', async () => {
+    vi.mocked(kpiSnapshotService.getKpiSnapshots).mockResolvedValue([
+      makeSnapshot({ entity_type: 'feeEarner', kpi_key: 'F-TU-01', rag_status: 'green' }),
+    ]);
     const result = await getFirmOverviewData(FIRM_ID);
     expect(result.utilisationSnapshot.green).toBeGreaterThanOrEqual(1);
   });
 
   it('returns null lastCalculated and empty data when no kpisDoc', async () => {
-    vi.mocked(mongoOps.getLatestCalculatedKpis).mockResolvedValue(null);
+    vi.mocked(mongoOps.getLatestEnrichedEntities).mockResolvedValue(null);
     const result = await getFirmOverviewData(FIRM_ID);
     expect(result.lastCalculated).toBeNull();
     expect(result.kpiCards.totalUnbilledWip.value).toBe(0);
     expect(result.departmentSummary).toEqual([]);
   });
 
-  it('enforces firm isolation — uses firmId in all MongoDB calls', async () => {
+  it('enforces firm isolation — uses firmId in all calls', async () => {
     await getFirmOverviewData('firm-xyz');
-    expect(vi.mocked(mongoOps.getLatestCalculatedKpis)).toHaveBeenCalledWith('firm-xyz');
+    expect(vi.mocked(kpiSnapshotService.getKpiSnapshots)).toHaveBeenCalledWith('firm-xyz', expect.any(Object));
     expect(vi.mocked(mongoOps.getLatestEnrichedEntities)).toHaveBeenCalledWith('firm-xyz', expect.any(String));
-    expect(vi.mocked(configService.getFirmConfig)).toHaveBeenCalledWith('firm-xyz');
   });
 });
 
@@ -156,14 +176,21 @@ describe('getFeeEarnerPerformanceData', () => {
   });
 
   it('includes all fee earners when no filter', async () => {
+    vi.mocked(kpiSnapshotService.getKpiSnapshots).mockResolvedValue([
+      makeSnapshot({ entity_type: 'feeEarner', entity_id: 'l-1', entity_name: 'Alice', kpi_key: 'F-TU-01' }),
+    ]);
     const result = await getFeeEarnerPerformanceData(FIRM_ID);
     expect(result.feeEarners).toHaveLength(1);
     expect(result.feeEarners[0].name).toBe('Alice');
   });
 
   it('filters by payModel', async () => {
+    vi.mocked(kpiSnapshotService.getKpiSnapshots).mockResolvedValue([
+      makeSnapshot({ entity_type: 'feeEarner', entity_id: 'l-1', entity_name: 'Alice', kpi_key: 'F-TU-01' }),
+    ]);
     vi.mocked(mongoOps.getLatestEnrichedEntities).mockImplementation(async (_fid, entityType) => {
-      if (entityType === 'timeEntry') return { records: [{ lawyerName: 'Alice', lawyerPayModel: 'FeeShare', date: '2024-05-01', durationHours: 2, recordedValue: 200, ageInDays: 30 }], firm_id: FIRM_ID, entity_type: 'timeEntry', data_version: '1', source_uploads: [], record_count: 1 } as never;
+      if (entityType === 'feeEarner') return { records: [{ _id: 'l-1', payModel: 'FeeShare' }], firm_id: FIRM_ID, entity_type: 'feeEarner', data_version: '1', source_uploads: [], record_count: 1 } as never;
+      if (entityType === 'calculatedKpis') return makeCalculatedKpisEntity();
       return null;
     });
     const salaried = await getFeeEarnerPerformanceData(FIRM_ID, { payModel: 'Salaried' });
@@ -173,9 +200,10 @@ describe('getFeeEarnerPerformanceData', () => {
   });
 
   it('pagination returns subset and correct totalCount', async () => {
-    const doc = makeKpisDoc();
-    (doc.kpis.aggregate.feeEarners as ReturnType<typeof makeFeeEarner>[]).push(makeFeeEarner({ lawyerId: 'l-2', lawyerName: 'Bob' }));
-    vi.mocked(mongoOps.getLatestCalculatedKpis).mockResolvedValue(doc as never);
+    vi.mocked(kpiSnapshotService.getKpiSnapshots).mockResolvedValue([
+      makeSnapshot({ entity_id: 'l-1', entity_name: 'Alice', kpi_key: 'F-TU-01' }),
+      makeSnapshot({ entity_id: 'l-2', entity_name: 'Bob', kpi_key: 'F-TU-01' }),
+    ]);
     const result = await getFeeEarnerPerformanceData(FIRM_ID, { limit: 1, offset: 0 });
     expect(result.feeEarners).toHaveLength(1);
     expect(result.pagination.totalCount).toBe(2);
@@ -183,6 +211,9 @@ describe('getFeeEarnerPerformanceData', () => {
   });
 
   it('returns recording pattern for last 20 working days', async () => {
+    vi.mocked(kpiSnapshotService.getKpiSnapshots).mockResolvedValue([
+      makeSnapshot({ entity_id: 'l-1', entity_name: 'Alice', kpi_key: 'F-TU-01' }),
+    ]);
     const result = await getFeeEarnerPerformanceData(FIRM_ID);
     expect(result.feeEarners[0].recordingPattern).toHaveLength(20);
     expect(result.feeEarners[0].recordingPattern[0]).toHaveProperty('date');
@@ -190,14 +221,17 @@ describe('getFeeEarnerPerformanceData', () => {
   });
 
   it('generates alert when recordingGapDays > 5', async () => {
-    const doc = makeKpisDoc();
-    (doc.kpis.aggregate.feeEarners as ReturnType<typeof makeFeeEarner>[])[0].recordingGapDays = 10;
-    vi.mocked(mongoOps.getLatestCalculatedKpis).mockResolvedValue(doc as never);
+    vi.mocked(kpiSnapshotService.getKpiSnapshots).mockResolvedValue([
+      makeSnapshot({ entity_id: 'l-1', entity_name: 'Alice', kpi_key: 'recordingGapDays', kpi_value: 10 }),
+    ]);
     const result = await getFeeEarnerPerformanceData(FIRM_ID);
     expect(result.alerts.some(a => a.type === 'recording_gap')).toBe(true);
   });
 
-  it('works when no time entry data uploaded (graceful null)', async () => {
+  it('works when no enriched feeEarner entities (graceful null)', async () => {
+    vi.mocked(kpiSnapshotService.getKpiSnapshots).mockResolvedValue([
+      makeSnapshot({ entity_id: 'l-1', entity_name: 'Alice', kpi_key: 'F-TU-01' }),
+    ]);
     vi.mocked(mongoOps.getLatestEnrichedEntities).mockResolvedValue(null);
     const result = await getFeeEarnerPerformanceData(FIRM_ID);
     expect(result.feeEarners).toHaveLength(1);
@@ -249,11 +283,13 @@ describe('getWipData', () => {
         defaults: { green: { max: 8 }, amber: { min: 8, max: 15 }, red: { min: 15 } },
       }],
     } as never);
-    // makeMatter has wipTotalBillable: 2000, wipTotalWriteOff: 100 → 5% write-off → GREEN
-    // Override to produce 12% write-off (above old 10% red threshold, below new 15%)
-    const doc = makeKpisDoc();
-    (doc.kpis.aggregate.matters as ReturnType<typeof makeMatter>[])[0].wipTotalWriteOff = 240; // 12% of 2000
-    vi.mocked(mongoOps.getLatestCalculatedKpis).mockResolvedValue(doc as never);
+    // makeMatter wipTotalBillable: 2000, wipTotalWriteOff override to 12% → AMBER
+    const agg = makeAggregate();
+    (agg.matters as ReturnType<typeof makeMatter>[])[0].wipTotalWriteOff = 240;
+    vi.mocked(mongoOps.getLatestEnrichedEntities).mockImplementation(async (_fid, entityType) => {
+      if (entityType === 'calculatedKpis') return { aggregate: agg } as never;
+      return null;
+    });
     const result = await getWipData(FIRM_ID);
     // 12% is above amber min (8) but below red min (15) → AMBER, not RED
     expect(result.writeOffAnalysis.ragStatus).toBe('amber');
@@ -308,9 +344,12 @@ describe('getMatterAnalysisData', () => {
   });
 
   it('flags matters at risk when wipAge > 60', async () => {
-    const doc = makeKpisDoc();
-    (doc.kpis.aggregate.matters as ReturnType<typeof makeMatter>[])[0].wipAgeInDays = 75;
-    vi.mocked(mongoOps.getLatestCalculatedKpis).mockResolvedValue(doc as never);
+    const agg = makeAggregate();
+    (agg.matters as ReturnType<typeof makeMatter>[])[0].wipAgeInDays = 75;
+    vi.mocked(mongoOps.getLatestEnrichedEntities).mockImplementation(async (_fid, entityType) => {
+      if (entityType === 'calculatedKpis') return { aggregate: agg } as never;
+      return null;
+    });
     const result = await getMatterAnalysisData(FIRM_ID);
     expect(result.mattersAtRisk).toHaveLength(1);
     expect(result.mattersAtRisk[0].primaryIssue).toContain('75');
@@ -319,6 +358,7 @@ describe('getMatterAnalysisData', () => {
   it('filters by caseType', async () => {
     vi.mocked(mongoOps.getLatestEnrichedEntities).mockImplementation(async (_fid, entityType) => {
       if (entityType === 'matter') return { records: [{ matterId: 'm-1', matterNumber: '10001', caseType: 'Conveyancing', department: 'Property', responsibleLawyer: 'Alice', matterStatus: 'Active' }], firm_id: FIRM_ID, entity_type: 'matter', data_version: '1', source_uploads: [], record_count: 1 } as never;
+      if (entityType === 'calculatedKpis') return makeCalculatedKpisEntity();
       return null;
     });
     const result = await getMatterAnalysisData(FIRM_ID, { caseType: 'Litigation' });
@@ -355,9 +395,11 @@ describe('getClientIntelligenceData', () => {
   });
 
   it('returns empty clients gracefully when no client aggregate', async () => {
-    const doc = makeKpisDoc();
-    doc.kpis.aggregate.clients = [];
-    vi.mocked(mongoOps.getLatestCalculatedKpis).mockResolvedValue(doc as never);
+    const agg = makeAggregate({ clients: [] });
+    vi.mocked(mongoOps.getLatestEnrichedEntities).mockImplementation(async (_fid, entityType) => {
+      if (entityType === 'calculatedKpis') return { aggregate: agg } as never;
+      return null;
+    });
     const result = await getClientIntelligenceData(FIRM_ID);
     expect(result.clients).toHaveLength(0);
     expect(result.headlines.topClient).toBeNull();

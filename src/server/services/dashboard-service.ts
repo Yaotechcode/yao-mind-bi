@@ -4,20 +4,25 @@
  * One function per dashboard. Each function loads data in parallel,
  * applies filters in-memory, and returns a typed payload.
  *
- * RAG statuses come FROM calculated KPIs — never recalculated here.
+ * Data sources (post-migration):
+ *  - kpi_snapshots (Supabase): formula results + RAG statuses per entity
+ *  - enriched_entities (MongoDB): aggregated metrics, time entries, invoices,
+ *    matter attributes — anything not yet in kpi_snapshots
+ *
+ * RAG statuses come FROM kpi_snapshots — never recalculated here.
  */
 
 import type { AggregatedFeeEarner, AggregatedMatter, AggregatedClient, AggregatedDepartment, AggregatedFirm } from '../../shared/types/pipeline.js';
 import type { EnrichedTimeEntry, EnrichedInvoice, EnrichedDisbursement } from '../../shared/types/enriched.js';
-import type { FormulaResult, SnippetResult } from '../formula-engine/types.js';
-import type { RagAssignment } from '../formula-engine/rag-engine.js';
 import type {
   FirmOverviewPayload, FeeEarnerPerformancePayload, WipPayload,
   BillingPayload, MatterPayload, ClientPayload, MatterRow,
 } from '../../shared/types/dashboard-payloads.js';
 import { RagStatus } from '../../shared/types/index.js';
 import type { RagThresholdSet } from '../../shared/types/index.js';
-import { getLatestCalculatedKpis, getLatestEnrichedEntities } from '../lib/mongodb-operations.js';
+import { getLatestEnrichedEntities } from '../lib/mongodb-operations.js';
+import { getKpiSnapshots } from './kpi-snapshot-service.js';
+import type { KpiSnapshotRow } from './kpi-snapshot-service.js';
 import { getFirmConfig } from './config-service.js';
 
 // ---------------------------------------------------------------------------
@@ -63,7 +68,51 @@ export interface DashboardFilters {
 }
 
 // ---------------------------------------------------------------------------
-// Internal: loaded dashboard data
+// Snapshot helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the distinct kpi_key values present in kpi_snapshots for a given
+ * entity type. Call at the start of each dashboard function for diagnostics.
+ */
+async function getAvailableKpiKeys(firmId: string, entityType: string): Promise<string[]> {
+  const rows = await getKpiSnapshots(firmId, { entityType, period: 'current' });
+  const keys = [...new Set(rows.map((r) => r.kpi_key))].sort();
+  return keys;
+}
+
+/**
+ * Groups a flat array of KpiSnapshotRows by entity_id.
+ * Returns Map<entity_id, Map<kpi_key, KpiSnapshotRow>>.
+ */
+function groupSnapshotsByEntity(
+  snapshots: KpiSnapshotRow[],
+): Map<string, Map<string, KpiSnapshotRow>> {
+  const map = new Map<string, Map<string, KpiSnapshotRow>>();
+  for (const row of snapshots) {
+    if (!map.has(row.entity_id)) map.set(row.entity_id, new Map());
+    map.get(row.entity_id)!.set(row.kpi_key, row);
+  }
+  return map;
+}
+
+/** Pull a numeric kpi_value from an entity snapshot map, defaulting to 0. */
+function kpiNum(entitySnap: Map<string, KpiSnapshotRow> | undefined, key: string): number {
+  return entitySnap?.get(key)?.kpi_value ?? 0;
+}
+
+/** Pull a nullable numeric kpi_value (null when missing). */
+function kpiNumOrNull(entitySnap: Map<string, KpiSnapshotRow> | undefined, key: string): number | null {
+  return entitySnap?.get(key)?.kpi_value ?? null;
+}
+
+/** Pull the rag_status string from an entity snapshot map. */
+function kpiRag(entitySnap: Map<string, KpiSnapshotRow> | undefined, key: string): string {
+  return entitySnap?.get(key)?.rag_status ?? RagStatus.NEUTRAL;
+}
+
+// ---------------------------------------------------------------------------
+// Internal: loaded dashboard data (MongoDB-backed aggregated entities)
 // ---------------------------------------------------------------------------
 
 interface DashboardData {
@@ -73,9 +122,6 @@ interface DashboardData {
   departments: AggregatedDepartment[];
   firm: AggregatedFirm;
   dataQuality: { overallScore: number; entityIssues: unknown[]; knownGaps: unknown[] };
-  formulaResults: Record<string, FormulaResult>;
-  ragAssignments: Record<string, Record<string, RagAssignment>>;
-  snippetResults: Record<string, Record<string, SnippetResult>>;
   timeEntries: EnrichedTimeEntry[];
   invoices: EnrichedInvoice[];
   disbursements: EnrichedDisbursement[];
@@ -92,39 +138,37 @@ const EMPTY_FIRM: AggregatedFirm = {
   orphanedWip: { orphanedWipEntryCount: 0, orphanedWipHours: 0, orphanedWipValue: 0, orphanedWipPercent: 0, orphanedWipNote: '' },
 };
 
+/**
+ * Loads raw aggregated entity data from MongoDB (legacy pipeline output).
+ * Note: formula results and RAG statuses now come from kpi_snapshots (Supabase),
+ * not from the MongoDB KPI document. This function no longer calls
+ * getLatestCalculatedKpis — that path is replaced by direct kpi_snapshot queries.
+ */
 async function loadDashboardData(firmId: string): Promise<DashboardData> {
-  const [kpisDoc, timeEntryDoc, invoiceDoc, disbursementDoc, matterDoc] = await Promise.all([
-    getLatestCalculatedKpis(firmId),
+  const [timeEntryDoc, invoiceDoc, disbursementDoc, matterDoc, kpisDoc] = await Promise.all([
     getLatestEnrichedEntities(firmId, 'timeEntry'),
     getLatestEnrichedEntities(firmId, 'invoice'),
     getLatestEnrichedEntities(firmId, 'disbursement'),
     getLatestEnrichedEntities(firmId, 'matter'),
+    // kpisDoc for legacy aggregated-entity data only (not formula results)
+    getLatestEnrichedEntities(firmId, 'calculatedKpis'),
   ]);
 
-  const agg = kpisDoc?.kpis?.['aggregate'] as Record<string, unknown> | undefined;
-  const kpis = kpisDoc?.kpis as Record<string, unknown> | undefined;
+  const agg = (kpisDoc as unknown as Record<string, unknown> | null)?.['aggregate'] as Record<string, unknown> | undefined;
 
   return {
-    feeEarners:     (agg?.feeEarners as AggregatedFeeEarner[] | undefined) ?? [],
-    matters:        (agg?.matters    as AggregatedMatter[]    | undefined) ?? [],
-    clients:        (agg?.clients    as AggregatedClient[]    | undefined) ?? [],
-    departments:    (agg?.departments as AggregatedDepartment[] | undefined) ?? [],
-    firm:           (agg?.firm       as AggregatedFirm        | undefined) ?? EMPTY_FIRM,
-    dataQuality:    (agg?.dataQuality as { overallScore: number; entityIssues: unknown[]; knownGaps: unknown[] } | undefined) ?? { overallScore: 0, entityIssues: [], knownGaps: [] },
-    formulaResults: (kpis?.formulaResults as Record<string, FormulaResult> | undefined) ?? {},
-    ragAssignments: (kpis?.ragAssignments as Record<string, Record<string, RagAssignment>> | undefined) ?? {},
-    snippetResults: (kpis?.snippetResults as Record<string, Record<string, SnippetResult>> | undefined) ?? {},
+    feeEarners:     (agg?.['feeEarners'] as AggregatedFeeEarner[] | undefined) ?? [],
+    matters:        (agg?.['matters']    as AggregatedMatter[]    | undefined) ?? [],
+    clients:        (agg?.['clients']    as AggregatedClient[]    | undefined) ?? [],
+    departments:    (agg?.['departments'] as AggregatedDepartment[] | undefined) ?? [],
+    firm:           (agg?.['firm']       as AggregatedFirm        | undefined) ?? EMPTY_FIRM,
+    dataQuality:    (agg?.['dataQuality'] as { overallScore: number; entityIssues: unknown[]; knownGaps: unknown[] } | undefined) ?? { overallScore: 0, entityIssues: [], knownGaps: [] },
     timeEntries:    ((timeEntryDoc?.records ?? []) as unknown as EnrichedTimeEntry[]),
     invoices:       ((invoiceDoc?.records    ?? []) as unknown as EnrichedInvoice[]),
     disbursements:  ((disbursementDoc?.records ?? []) as unknown as EnrichedDisbursement[]),
     enrichedMatters: (matterDoc?.records ?? []) as Record<string, unknown>[],
-    calculatedAt:   kpisDoc?.calculated_at ? new Date(kpisDoc.calculated_at).toISOString() : null,
+    calculatedAt:   null,
   };
-}
-
-/** Get RAG status from assignments, defaulting to NEUTRAL. */
-function getRag(ragAssignments: Record<string, Record<string, RagAssignment>>, formulaId: string, entityId: string): string {
-  return ragAssignments?.[formulaId]?.[entityId]?.status ?? RagStatus.NEUTRAL;
 }
 
 /** Paginate an array; returns { items, totalCount }. */
@@ -196,8 +240,6 @@ function getThresholdDefaults(ragThresholds: RagThresholdSet[], metricKey: strin
 
 /**
  * Apply a threshold set to a value and return the matching RagStatus.
- * Checks RED first (handles "higher is worse" and "higher is better" correctly
- * as long as threshold ranges are mutually exclusive and contiguous).
  */
 function applyRagThreshold(value: number, defaults: ThresholdDefaults): RagStatus {
   const inRange = (t: { min?: number; max?: number }) =>
@@ -214,42 +256,72 @@ function applyRagThreshold(value: number, defaults: ThresholdDefaults): RagStatu
 // ---------------------------------------------------------------------------
 
 export async function getFirmOverviewData(firmId: string): Promise<FirmOverviewPayload> {
-  const [data] = await Promise.all([
+  // Diagnostic: log available kpi_keys for each entity type
+  const [feeEarnerKeys, matterKeys, firmKeys] = await Promise.all([
+    getAvailableKpiKeys(firmId, 'feeEarner'),
+    getAvailableKpiKeys(firmId, 'matter'),
+    getAvailableKpiKeys(firmId, 'firm'),
+  ]);
+  console.log('[dashboard/firm-overview] feeEarner kpi_keys:', feeEarnerKeys);
+  console.log('[dashboard/firm-overview] matter kpi_keys:', matterKeys);
+  console.log('[dashboard/firm-overview] firm kpi_keys:', firmKeys);
+
+  const [feeEarnerSnaps, matterSnaps, firmSnaps, data] = await Promise.all([
+    getKpiSnapshots(firmId, { entityType: 'feeEarner', period: 'current' }),
+    getKpiSnapshots(firmId, { entityType: 'matter', period: 'current' }),
+    getKpiSnapshots(firmId, { entityType: 'firm', period: 'current' }),
     loadDashboardData(firmId),
-    getFirmConfig(firmId),  // loaded for potential custom metrics
   ]);
 
-  const { feeEarners, matters, departments, firm, dataQuality, formulaResults, ragAssignments, invoices } = data;
+  const feeEarnerByEntity = groupSnapshotsByEntity(feeEarnerSnaps);
+  const matterByEntity    = groupSnapshotsByEntity(matterSnaps);
+  const firmByEntity      = groupSnapshotsByEntity(firmSnaps);
+  const firmSnap          = firmByEntity.get(firmId) ?? firmByEntity.values().next().value;
 
-  // KPI cards
-  const utilisationResult = formulaResults['F-TU-01'];
-  const utilisationValues = utilisationResult
-    ? Object.values(utilisationResult.entityResults).map(e => e.value).filter((v): v is number => v !== null)
-    : [];
-  const avgUtilisation = utilisationValues.length > 0
-    ? utilisationValues.reduce((s, v) => s + v, 0) / utilisationValues.length
-    : null;
+  const { invoices } = data;
 
-  const realisationResult = formulaResults['F-RB-01'];
-  const realisationValues = realisationResult
-    ? Object.values(realisationResult.entityResults).map(e => e.value).filter((v): v is number => v !== null)
-    : [];
-  const avgRealisation = realisationValues.length > 0
-    ? realisationValues.reduce((s, v) => s + v, 0) / realisationValues.length
-    : null;
+  // KPI cards from kpi_snapshots
+  const firmUtilisation = kpiNumOrNull(firmSnap, 'F-TU-01');
+  const firmRealisation = kpiNumOrNull(firmSnap, 'F-RB-01');
+  const combinedLockup  = kpiNumOrNull(firmSnap, 'F-WL-04');
+  const totalUnbilledWip = kpiNum(firmSnap, 'totalWipValue') || data.firm.totalWipValue;
 
-  const lockupResult = formulaResults['F-WL-04'];
-  const lockupFirmValue = lockupResult?.entityResults?.['firm']?.value ?? null;
+  // Utilisation snapshot from fee earner snapshots
+  let green = 0, amber = 0, red = 0;
+  const utilisationFeeEarners = [...feeEarnerByEntity.entries()].map(([entityId, snap]) => {
+    const rag = kpiRag(snap, 'F-TU-01');
+    if (rag === RagStatus.GREEN) green++;
+    else if (rag === RagStatus.AMBER) amber++;
+    else if (rag === RagStatus.RED) red++;
+    return {
+      name: snap.get('F-TU-01')?.entity_name ?? entityId,
+      utilisation: kpiNumOrNull(snap, 'F-TU-01'),
+      ragStatus: rag,
+    };
+  });
 
-  // WIP age bands
+  // WIP age bands from matter kpi_snapshots (wipAge key) or fallback to MongoDB
   const bandMap = new Map<string, { value: number; count: number }>(
     WIP_BANDS.map(b => [b.band, { value: 0, count: 0 }]),
   );
-  for (const m of matters) {
-    const band = classifyWipAge(m.wipAgeInDays ?? null);
-    const entry = bandMap.get(band.band)!;
-    entry.value += m.wipTotalBillable;
-    entry.count += 1;
+  if (matterSnaps.some(r => r.kpi_key === 'wipAge')) {
+    // Use wipAge from kpi_snapshots
+    for (const [, snap] of matterByEntity) {
+      const wipAge = kpiNumOrNull(snap, 'wipAge');
+      const wipValue = kpiNum(snap, 'wipValue') || kpiNum(snap, 'wipTotalBillable');
+      const band = classifyWipAge(wipAge);
+      const entry = bandMap.get(band.band)!;
+      entry.value += wipValue;
+      entry.count += 1;
+    }
+  } else {
+    // Fallback: MongoDB aggregated matters
+    for (const m of data.matters) {
+      const band = classifyWipAge(m.wipAgeInDays ?? null);
+      const entry = bandMap.get(band.band)!;
+      entry.value += m.wipTotalBillable;
+      entry.count += 1;
+    }
   }
   const wipAgeBands = WIP_BANDS.map(b => ({
     ...b, value: bandMap.get(b.band)?.value ?? 0, count: bandMap.get(b.band)?.count ?? 0,
@@ -261,7 +333,7 @@ export async function getFirmOverviewData(firmId: string): Promise<FirmOverviewP
     const invRec = inv as unknown as Record<string, unknown>;
     const dateStr = toDateString(invRec['invoiceDate']);
     if (!dateStr) continue;
-    const period = dateStr.slice(0, 7); // YYYY-MM
+    const period = dateStr.slice(0, 7);
     const total = (invRec['total'] as number | undefined) ?? 0;
     trendMap.set(period, (trendMap.get(period) ?? 0) + total);
   }
@@ -270,86 +342,64 @@ export async function getFirmOverviewData(firmId: string): Promise<FirmOverviewP
     .slice(-12)
     .map(([period, billed]) => ({ period, billed }));
 
-  // Top leakage risks (top 10 by riskScore)
-  const enrichedMatterMap = new Map<string, Record<string, unknown>>();
-  for (const em of data.enrichedMatters) {
-    const id = (em['matterId'] ?? em['matterNumber']) as string | undefined;
-    if (id) enrichedMatterMap.set(id, em);
-  }
+  // Top leakage risks from matter kpi_snapshots or MongoDB matters
+  const leakageSource = matterSnaps.some(r => r.kpi_key === 'wipAge')
+    ? [...matterByEntity.entries()].map(([entityId, snap]) => ({
+        matterId: entityId,
+        matterNumber: snap.get('F-WL-01')?.entity_name ?? entityId,
+        clientName: 'Unknown',
+        lawyerName: 'Unknown',
+        wipValue: kpiNum(snap, 'wipValue') || kpiNum(snap, 'wipTotalBillable'),
+        wipAge: kpiNum(snap, 'wipAge'),
+        ragStatus: kpiRag(snap, 'F-WL-01'),
+        riskScore: Math.round(kpiNum(snap, 'wipAge') * (kpiNum(snap, 'wipValue') || kpiNum(snap, 'wipTotalBillable')) / 1000),
+      }))
+    : data.matters
+        .filter(m => (m.wipTotalBillable ?? 0) > 0)
+        .map(m => {
+          const wipAge = m.wipAgeInDays ?? 0;
+          const wipValue = m.wipTotalBillable;
+          return {
+            matterId: m.matterId ?? '',
+            matterNumber: m.matterNumber ?? '',
+            clientName: 'Unknown',
+            lawyerName: 'Unknown',
+            wipValue,
+            wipAge,
+            ragStatus: RagStatus.NEUTRAL,
+            riskScore: Math.round(wipAge * wipValue / 1000),
+          };
+        });
 
-  const leakageRisks = matters
-    .filter(m => (m.wipTotalBillable ?? 0) > 0)
-    .map(m => {
-      const em = enrichedMatterMap.get(m.matterId ?? '') ?? enrichedMatterMap.get(m.matterNumber ?? '');
-      const wipAge = m.wipAgeInDays ?? 0;
-      const wipValue = m.wipTotalBillable;
-      const ragStatus = getRag(ragAssignments, 'F-WL-01', m.matterId ?? m.matterNumber ?? '');
-      return {
-        matterId: m.matterId ?? '',
-        matterNumber: m.matterNumber ?? '',
-        clientName: (em?.['clientName'] as string | undefined) ?? (em?.['displayName'] as string | undefined) ?? 'Unknown',
-        lawyerName: (em?.['responsibleLawyer'] as string | undefined) ?? 'Unknown',
-        wipValue,
-        wipAge,
-        ragStatus,
-        riskScore: Math.round(wipAge * wipValue / 1000),
-      };
-    })
+  const topLeakageRisks = leakageSource
     .sort((a, b) => b.riskScore - a.riskScore)
     .slice(0, 10);
 
-  // Utilisation snapshot
-  let green = 0, amber = 0, red = 0;
-  const utilisationFeeEarners = feeEarners.map(fe => {
-    const entityId = fe.lawyerId ?? fe.lawyerName ?? '';
-    const rag = getRag(ragAssignments, 'F-TU-01', entityId);
-    if (rag === RagStatus.GREEN) green++;
-    else if (rag === RagStatus.AMBER) amber++;
-    else if (rag === RagStatus.RED) red++;
-    const val = formulaResults['F-TU-01']?.entityResults?.[entityId]?.value ?? null;
-    return { name: fe.lawyerName ?? entityId, utilisation: val, ragStatus: rag };
-  });
+  // Department summary from matter snapshots or MongoDB
+  const departmentSummary = data.departments.map(dept => ({
+    name: dept.name,
+    wipValue: dept.wipChargeableValue,
+    matterCount: dept.activeMatterCount,
+    utilisation: null,
+    ragStatus: RagStatus.NEUTRAL,
+  }));
 
-  // Department summary
-  const departmentSummary = departments.map(dept => {
-    const deptFeeEarners = feeEarners.filter(fe => {
-      const em = data.enrichedMatters.find(m => (m['responsibleLawyer'] as string | undefined) === fe.lawyerName);
-      return em?.['department'] === dept.name;
-    });
-    const utilisationVals = deptFeeEarners
-      .map(fe => formulaResults['F-TU-01']?.entityResults?.[fe.lawyerId ?? fe.lawyerName ?? '']?.value)
-      .filter((v): v is number => typeof v === 'number');
-    const avgUtil = utilisationVals.length > 0
-      ? utilisationVals.reduce((s, v) => s + v, 0) / utilisationVals.length
-      : null;
-    const ragStatus = avgUtil !== null
-      ? getRag(ragAssignments, 'F-TU-01', deptFeeEarners[0]?.lawyerId ?? deptFeeEarners[0]?.lawyerName ?? '')
-      : RagStatus.NEUTRAL;
-    return {
-      name: dept.name,
-      wipValue: dept.wipChargeableValue,
-      matterCount: dept.activeMatterCount,
-      utilisation: avgUtil,
-      ragStatus,
-    };
-  });
-
-  const issueCount = (dataQuality.entityIssues as unknown[]).length + (dataQuality.knownGaps as unknown[]).length;
+  const issueCount = (data.dataQuality.entityIssues as unknown[]).length + (data.dataQuality.knownGaps as unknown[]).length;
 
   return {
     kpiCards: {
-      totalUnbilledWip: { value: firm.totalWipValue, ragStatus: RagStatus.NEUTRAL },
-      firmRealisation: { value: avgRealisation, ragStatus: avgRealisation !== null ? getRag(ragAssignments, 'F-RB-01', 'firm') : RagStatus.NEUTRAL },
-      firmUtilisation: { value: avgUtilisation, ragStatus: avgUtilisation !== null ? getRag(ragAssignments, 'F-TU-01', 'firm') : RagStatus.NEUTRAL },
-      combinedLockup: { value: lockupFirmValue, ragStatus: lockupFirmValue !== null ? getRag(ragAssignments, 'F-WL-04', 'firm') : RagStatus.NEUTRAL },
+      totalUnbilledWip: { value: totalUnbilledWip, ragStatus: RagStatus.NEUTRAL },
+      firmRealisation:  { value: firmRealisation,  ragStatus: kpiRag(firmSnap, 'F-RB-01') },
+      firmUtilisation:  { value: firmUtilisation,  ragStatus: kpiRag(firmSnap, 'F-TU-01') },
+      combinedLockup:   { value: combinedLockup,   ragStatus: kpiRag(firmSnap, 'F-WL-04') },
     },
     wipAgeBands,
     revenueTrend,
-    topLeakageRisks: leakageRisks,
+    topLeakageRisks,
     utilisationSnapshot: { green, amber, red, feeEarners: utilisationFeeEarners },
     departmentSummary,
-    dataQuality: { issueCount, criticalCount: (dataQuality.entityIssues as unknown[]).length },
-    lastCalculated: data.calculatedAt,
+    dataQuality: { issueCount, criticalCount: (data.dataQuality.entityIssues as unknown[]).length },
+    lastCalculated: feeEarnerSnaps[0]?.pulled_at ?? null,
   };
 }
 
@@ -361,107 +411,116 @@ export async function getFeeEarnerPerformanceData(
   firmId: string,
   filters: DashboardFilters = {},
 ): Promise<FeeEarnerPerformancePayload> {
-  const [data, firmConfig] = await Promise.all([loadDashboardData(firmId), getFirmConfig(firmId)]);
-  const { feeEarners, formulaResults, ragAssignments, snippetResults, timeEntries } = data;
+  const availableKeys = await getAvailableKpiKeys(firmId, 'feeEarner');
+  console.log('[dashboard/fee-earner-performance] feeEarner kpi_keys:', availableKeys);
+
+  const [feeEarnerSnaps, enrichedFeeEarners, firmConfig] = await Promise.all([
+    getKpiSnapshots(firmId, { entityType: 'feeEarner', period: 'current' }),
+    getLatestEnrichedEntities(firmId, 'feeEarner'),
+    getFirmConfig(firmId),
+  ]);
+
   const weeklyTarget = firmConfig.weeklyTargetHours ?? 37.5;
 
-  // Build grade/payModel/department lookup from enriched time entries
-  const feProfileMap = new Map<string, { grade: string; payModel: string; department: string }>();
-  for (const te of timeEntries) {
-    const teRec = te as unknown as Record<string, unknown>;
-    const name = (te.lawyerName ?? teRec['responsibleLawyer']) as string | undefined;
-    if (!name || feProfileMap.has(name)) continue;
-    feProfileMap.set(name, {
-      grade: (te.lawyerGrade ?? 'Unknown') as string,
-      payModel: (te.lawyerPayModel ?? 'Unknown') as string,
-      department: (teRec['department'] as string | undefined) ?? 'Unknown',
-    });
+  // Build attribute lookup from MongoDB enriched fee earner entities
+  const feAttrMap = new Map<string, Record<string, unknown>>();
+  for (const rec of enrichedFeeEarners?.records ?? []) {
+    const r = rec as Record<string, unknown>;
+    const id = (r['_id'] ?? r['entityId'] ?? r['lawyerId']) as string | undefined;
+    if (id) feAttrMap.set(id, r);
   }
 
-  // Working days lookup for recording pattern
-  const last20Days = lastNWorkingDays(20);
-  const entryDatesByLawyer = new Map<string, Set<string>>();
-  for (const te of timeEntries) {
-    const teRec = te as unknown as Record<string, unknown>;
-    const name = (te.lawyerName ?? teRec['responsibleLawyer']) as string | undefined;
-    const dateStr = toDateString(teRec['date']);
-    if (!name || !dateStr) continue;
-    if (!entryDatesByLawyer.has(name)) entryDatesByLawyer.set(name, new Set());
-    entryDatesByLawyer.get(name)!.add(dateStr.slice(0, 10));
-  }
+  // Group kpi_snapshot rows by entity_id
+  const byEntity = groupSnapshotsByEntity(feeEarnerSnaps);
 
-  // Apply filters
-  let filtered = feeEarners;
-  if (filters.department) filtered = filtered.filter(fe => feProfileMap.get(fe.lawyerName ?? '')?.department === filters.department);
-  if (filters.grade) filtered = filtered.filter(fe => feProfileMap.get(fe.lawyerName ?? '')?.grade === filters.grade);
-  if (filters.payModel) filtered = filtered.filter(fe => feProfileMap.get(fe.lawyerName ?? '')?.payModel === filters.payModel);
-  if (filters.activeOnly) filtered = filtered.filter(fe => (fe.recordingGapDays ?? 999) < 90);
+  // Build row list from kpi_snapshots — one row per entity_id
+  let allRows = [...byEntity.entries()].map(([entityId, snap]) => {
+    const anyRow = snap.values().next().value as KpiSnapshotRow | undefined;
+    const name = anyRow?.entity_name ?? entityId;
 
-  const { items: paged, totalCount } = paginate(filtered, filters.limit, filters.offset);
+    // Attributes from MongoDB enriched entity
+    const attr = feAttrMap.get(entityId) ?? {};
+    const payModel  = (attr['payModel']  as string | undefined) ?? 'Unknown';
+    const isActive  = (attr['status']    as string | undefined) === 'ACTIVE';
+    // department and grade not yet available in API pipeline feeEarner entities
+    const department = (attr['department'] as string | undefined) ?? 'Unknown';
+    const grade      = (attr['grade']      as string | undefined) ?? 'Unknown';
 
-  const rows = paged.map(fe => {
-    const entityId = fe.lawyerId ?? fe.lawyerName ?? '';
-    const profile = feProfileMap.get(fe.lawyerName ?? '') ?? { grade: 'Unknown', payModel: 'Unknown', department: 'Unknown' };
-    const utilisationVal = formulaResults['F-TU-01']?.entityResults?.[entityId]?.value ?? null;
-    const scorecardVal = formulaResults['F-CS-02']?.entityResults?.[entityId]?.value ?? null;
-    const effectiveRate = formulaResults['F-RB-02']?.entityResults?.[entityId]?.value ?? null;
-    const writeOffRate = fe.wipTotalValue > 0 ? (fe.wipWriteOffValue / fe.wipTotalValue) * 100 : 0;
-    const employmentCost = snippetResults?.['SN-004']?.[entityId]?.value ?? null;
-    const profit = formulaResults['F-PR-02']?.entityResults?.[entityId]?.value ?? null;
-    const revenueMultiple = profit !== null && employmentCost !== null && employmentCost > 0
-      ? fe.invoicedRevenue / employmentCost : null;
-    const entryDates = entryDatesByLawyer.get(fe.lawyerName ?? '') ?? new Set();
-    const recordingPattern = last20Days.map(date => ({ date, hasEntries: entryDates.has(date) }));
+    // KPI values from kpi_snapshots
+    const chargeableHours   = kpiNum(snap, 'chargeableHours');
+    const totalHours        = kpiNum(snap, 'totalHours');
+    const utilisation       = kpiNumOrNull(snap, 'F-TU-01');
+    const utilisationRag    = kpiRag(snap, 'F-TU-01');
+    const wipValueRecorded  = kpiNum(snap, 'wipValue') || kpiNum(snap, 'wipTotalBillable');
+    const billedRevenue     = kpiNum(snap, 'billedRevenue') || kpiNum(snap, 'invoicedRevenue');
+    const effectiveRate     = kpiNumOrNull(snap, 'F-RB-02');
+    const writeOffRate      = kpiNum(snap, 'writeOffRate');
+    const recordingGapDays  = kpiNumOrNull(snap, 'recordingGapDays');
+    const matterCount       = kpiNum(snap, 'matterCount') || kpiNum(snap, 'wipMatterCount');
+    const scorecard         = kpiNumOrNull(snap, 'F-CS-02');
+    const scorecardRag      = kpiRag(snap, 'F-CS-02');
+    const employmentCost    = kpiNumOrNull(snap, 'employmentCost');
+    const revenueMultiple   = kpiNumOrNull(snap, 'revenueMultiple');
+    const profit            = kpiNumOrNull(snap, 'profit') ?? kpiNumOrNull(snap, 'F-PR-02');
 
     return {
       id: entityId,
-      name: fe.lawyerName ?? entityId,
-      department: profile.department,
-      grade: profile.grade,
-      payModel: profile.payModel,
-      isActive: (fe.recordingGapDays ?? 999) < 90,
-      chargeableHours: fe.wipChargeableHours,
-      totalHours: fe.wipTotalHours,
-      utilisation: utilisationVal,
-      utilisationRag: getRag(ragAssignments, 'F-TU-01', entityId),
-      wipValueRecorded: fe.wipTotalValue,
-      billedRevenue: fe.invoicedRevenue,
+      name,
+      department,
+      grade,
+      payModel,
+      isActive,
+      chargeableHours,
+      totalHours,
+      utilisation,
+      utilisationRag,
+      wipValueRecorded,
+      billedRevenue,
       effectiveRate,
       writeOffRate,
-      recordingGapDays: fe.recordingGapDays,
-      matterCount: fe.wipMatterCount,
-      scorecard: scorecardVal,
-      scorecardRag: getRag(ragAssignments, 'F-CS-02', entityId),
+      recordingGapDays,
+      matterCount,
+      scorecard,
+      scorecardRag,
       employmentCost,
       revenueMultiple,
       profit,
-      recordingPattern,
+      // Recording pattern not available from kpi_snapshots — requires raw time entries
+      recordingPattern: lastNWorkingDays(20).map(date => ({ date, hasEntries: false })),
     };
   });
 
+  // Apply filters
+  if (filters.department) allRows = allRows.filter(r => r.department === filters.department);
+  if (filters.grade)      allRows = allRows.filter(r => r.grade === filters.grade);
+  if (filters.payModel)   allRows = allRows.filter(r => r.payModel === filters.payModel);
+  if (filters.activeOnly) allRows = allRows.filter(r => r.isActive);
+
+  const { items: paged, totalCount } = paginate(allRows, filters.limit, filters.offset);
+
   // Alerts: recording gap > 5 days
-  const alerts = feeEarners
-    .filter(fe => (fe.recordingGapDays ?? 0) > 5)
-    .map(fe => ({
-      feeEarnerId: fe.lawyerId ?? fe.lawyerName ?? '',
-      name: fe.lawyerName ?? '',
+  const alerts = allRows
+    .filter(r => (r.recordingGapDays ?? 0) > 5)
+    .map(r => ({
+      feeEarnerId: r.id,
+      name: r.name,
       type: 'recording_gap',
-      message: `No time entries for ${fe.recordingGapDays} days`,
+      message: `No time entries for ${r.recordingGapDays} days`,
     }));
 
-  const allGrades = [...new Set(feeEarners.map(fe => feProfileMap.get(fe.lawyerName ?? '')?.grade ?? '').filter(Boolean))];
-  const allDepts = [...new Set(feeEarners.map(fe => feProfileMap.get(fe.lawyerName ?? '')?.department ?? '').filter(Boolean))];
-  const allPayModels = [...new Set(feeEarners.map(fe => feProfileMap.get(fe.lawyerName ?? '')?.payModel ?? '').filter(Boolean))];
+  const allDepts     = [...new Set(allRows.map(r => r.department).filter(Boolean))];
+  const allGrades    = [...new Set(allRows.map(r => r.grade).filter(Boolean))];
+  const allPayModels = [...new Set(allRows.map(r => r.payModel).filter(Boolean))];
 
-  const utilisationTarget = (weeklyTarget / (weeklyTarget + 7.5)) * 100; // heuristic target
+  const utilisationTarget = (weeklyTarget / (weeklyTarget + 7.5)) * 100;
 
   return {
     alerts,
-    feeEarners: rows,
+    feeEarners: paged,
     pagination: { totalCount, limit: filters.limit ?? 50, offset: filters.offset ?? 0 },
     charts: {
-      utilisationBars: rows.map(r => ({ name: r.name, value: r.utilisation, target: utilisationTarget, ragStatus: r.utilisationRag })),
-      chargeableStack: rows.map(r => ({ name: r.name, chargeable: r.chargeableHours, nonChargeable: r.totalHours - r.chargeableHours })),
+      utilisationBars: paged.map(r => ({ name: r.name, value: r.utilisation, target: utilisationTarget, ragStatus: r.utilisationRag })),
+      chargeableStack: paged.map(r => ({ name: r.name, chargeable: r.chargeableHours, nonChargeable: r.totalHours - r.chargeableHours })),
     },
     filters: { departments: allDepts, grades: allGrades, payModels: allPayModels },
   };
@@ -475,6 +534,9 @@ export async function getWipData(
   firmId: string,
   filters: DashboardFilters = {},
 ): Promise<WipPayload> {
+  const availableKeys = await getAvailableKpiKeys(firmId, 'matter');
+  console.log('[dashboard/wip] matter kpi_keys:', availableKeys);
+
   const [data, firmConfig] = await Promise.all([loadDashboardData(firmId), getFirmConfig(firmId)]);
   const { matters, timeEntries, disbursements, enrichedMatters } = data;
   const ragThresholds = firmConfig.ragThresholds ?? [];
@@ -605,13 +667,12 @@ export async function getWipData(
 
   const { items: pagedGroups, totalCount } = paginate(allGroups, filters.limit, filters.offset);
 
-  const atRiskValue = ageBands.slice(2).reduce((s, b) => s + b.value, 0); // 61+ days
+  const atRiskValue = ageBands.slice(2).reduce((s, b) => s + b.value, 0);
   const totalUnbilledWip = totalWipValue;
   const atRiskPct = totalUnbilledWip > 0 ? (atRiskValue / totalUnbilledWip) * 100 : 0;
 
-  // Unique filter values
-  const allDepts = [...new Set(enrichedMatters.map(em => (em['department'] as string | undefined) ?? '').filter(Boolean))];
-  const allLawyers = [...new Set(enrichedMatters.map(em => (em['responsibleLawyer'] as string | undefined) ?? '').filter(Boolean))];
+  const allDepts    = [...new Set(enrichedMatters.map(em => (em['department'] as string | undefined) ?? '').filter(Boolean))];
+  const allLawyers  = [...new Set(enrichedMatters.map(em => (em['responsibleLawyer'] as string | undefined) ?? '').filter(Boolean))];
   const allCaseTypes = [...new Set(enrichedMatters.map(em => (em['caseType'] as string | undefined) ?? '').filter(Boolean))];
 
   return {
@@ -647,8 +708,17 @@ export async function getBillingCollectionsData(
   firmId: string,
   filters: DashboardFilters = {},
 ): Promise<BillingPayload> {
-  const data = await loadDashboardData(firmId);
-  const { firm, invoices, formulaResults } = data;
+  const availableKeys = await getAvailableKpiKeys(firmId, 'invoice');
+  console.log('[dashboard/billing] invoice kpi_keys:', availableKeys);
+
+  const [firmSnaps, data] = await Promise.all([
+    getKpiSnapshots(firmId, { entityType: 'firm', period: 'current' }),
+    loadDashboardData(firmId),
+  ]);
+  const { firm, invoices } = data;
+
+  const firmByEntity = groupSnapshotsByEntity(firmSnaps);
+  const firmSnap     = firmByEntity.get(firmId) ?? firmByEntity.values().next().value;
 
   // Apply filters
   let filteredInvoices = invoices;
@@ -742,29 +812,33 @@ export async function getBillingCollectionsData(
 
   const { items: pagedInvoices, totalCount } = paginate(allInvoiceRows, filters.limit, filters.offset);
 
-  // Slow payers — only if any datePaid fields present
   const hasDatePaid = filteredInvoices.some(inv => !!(inv as unknown as Record<string, unknown>)['datePaid']);
   const slowPayers = hasDatePaid ? [] : null;
 
-  // WIP pipeline
-  const totalWipValue = firm.totalWipValue;
-  const lockupDays = formulaResults['F-WL-04']?.entityResults?.['firm']?.value ?? null;
-  const allDepts = [...new Set(filteredInvoices.map(inv => ((inv as unknown as Record<string, unknown>)['department'] as string | undefined) ?? '').filter(Boolean))];
+  // Firm totals — prefer kpi_snapshots, fall back to MongoDB aggregate
+  const totalWipValue     = kpiNum(firmSnap, 'totalWipValue') || firm.totalWipValue;
+  const totalOutstanding  = kpiNum(firmSnap, 'totalOutstanding') || firm.totalOutstanding;
+  const totalInvoiced     = kpiNum(firmSnap, 'totalInvoicedRevenue') || firm.totalInvoicedRevenue;
+  const totalPaid         = kpiNum(firmSnap, 'totalPaid') || firm.totalPaid;
+  const totalWriteOffValue = kpiNum(firmSnap, 'totalWriteOffValue') || firm.totalWriteOffValue;
+  const lockupDays        = kpiNumOrNull(firmSnap, 'F-WL-04');
+
+  const allDepts   = [...new Set(filteredInvoices.map(inv => ((inv as unknown as Record<string, unknown>)['department'] as string | undefined) ?? '').filter(Boolean))];
   const allLawyers = [...new Set(filteredInvoices.map(inv => ((inv as unknown as Record<string, unknown>)['responsibleLawyer'] as string | undefined) ?? '').filter(Boolean))];
 
   const collectionRate = invoicedPeriodValue > 0 ? (collectedPeriodValue / invoicedPeriodValue) * 100 : 0;
 
   return {
     headlines: {
-      invoicedPeriod: { value: invoicedPeriodValue, count: currentPeriod.length },
+      invoicedPeriod:  { value: invoicedPeriodValue,  count: currentPeriod.length },
       collectedPeriod: { value: collectedPeriodValue, rate: collectionRate },
-      totalOutstanding: { value: firm.totalOutstanding },
+      totalOutstanding: { value: totalOutstanding },
     },
     pipeline: {
-      wip: { value: totalWipValue, avgDays: lockupDays },
-      invoiced: { value: firm.totalInvoicedRevenue, avgDaysToPayment: null },
-      paid: { value: firm.totalPaid },
-      writtenOff: { value: firm.totalWriteOffValue, rate: firm.totalWipValue > 0 ? (firm.totalWriteOffValue / firm.totalWipValue) * 100 : 0 },
+      wip:       { value: totalWipValue,  avgDays: lockupDays },
+      invoiced:  { value: totalInvoiced,  avgDaysToPayment: null },
+      paid:      { value: totalPaid },
+      writtenOff: { value: totalWriteOffValue, rate: totalWipValue > 0 ? (totalWriteOffValue / totalWipValue) * 100 : 0 },
       totalLockup: lockupDays ?? 0,
     },
     agedDebtors,
@@ -784,9 +858,18 @@ export async function getMatterAnalysisData(
   firmId: string,
   filters: DashboardFilters = {},
 ): Promise<MatterPayload> {
-  const [data, firmConfig] = await Promise.all([loadDashboardData(firmId), getFirmConfig(firmId)]);
-  const { matters, enrichedMatters, timeEntries, invoices, formulaResults, ragAssignments } = data;
+  const availableKeys = await getAvailableKpiKeys(firmId, 'matter');
+  console.log('[dashboard/matters] matter kpi_keys:', availableKeys);
+
+  const [matterSnaps, data, firmConfig] = await Promise.all([
+    getKpiSnapshots(firmId, { entityType: 'matter', period: 'current' }),
+    loadDashboardData(firmId),
+    getFirmConfig(firmId),
+  ]);
+
+  const { matters, enrichedMatters, timeEntries, invoices } = data;
   const ragThresholds = firmConfig.ragThresholds ?? [];
+  const matterByEntity = groupSnapshotsByEntity(matterSnaps);
 
   const enrichedMatterMap = new Map<string, Record<string, unknown>>();
   for (const em of enrichedMatters) {
@@ -797,10 +880,10 @@ export async function getMatterAnalysisData(
   // Apply filters
   let filtered = matters;
   if (filters.department) filtered = filtered.filter(m => { const em = enrichedMatterMap.get(m.matterId ?? '') ?? enrichedMatterMap.get(m.matterNumber ?? ''); return em?.['department'] === filters.department; });
-  if (filters.caseType) filtered = filtered.filter(m => { const em = enrichedMatterMap.get(m.matterId ?? '') ?? enrichedMatterMap.get(m.matterNumber ?? ''); return em?.['caseType'] === filters.caseType; });
-  if (filters.status) filtered = filtered.filter(m => { const em = enrichedMatterMap.get(m.matterId ?? '') ?? enrichedMatterMap.get(m.matterNumber ?? ''); return em?.['matterStatus'] === filters.status; });
-  if (filters.lawyer) filtered = filtered.filter(m => { const em = enrichedMatterMap.get(m.matterId ?? '') ?? enrichedMatterMap.get(m.matterNumber ?? ''); return em?.['responsibleLawyer'] === filters.lawyer; });
-  if (filters.hasBudget) filtered = filtered.filter(m => { const em = enrichedMatterMap.get(m.matterId ?? '') ?? enrichedMatterMap.get(m.matterNumber ?? ''); return ((em?.['matterBudget'] as number | undefined) ?? 0) > 0; });
+  if (filters.caseType)   filtered = filtered.filter(m => { const em = enrichedMatterMap.get(m.matterId ?? '') ?? enrichedMatterMap.get(m.matterNumber ?? ''); return em?.['caseType'] === filters.caseType; });
+  if (filters.status)     filtered = filtered.filter(m => { const em = enrichedMatterMap.get(m.matterId ?? '') ?? enrichedMatterMap.get(m.matterNumber ?? ''); return em?.['matterStatus'] === filters.status; });
+  if (filters.lawyer)     filtered = filtered.filter(m => { const em = enrichedMatterMap.get(m.matterId ?? '') ?? enrichedMatterMap.get(m.matterNumber ?? ''); return em?.['responsibleLawyer'] === filters.lawyer; });
+  if (filters.hasBudget)  filtered = filtered.filter(m => { const em = enrichedMatterMap.get(m.matterId ?? '') ?? enrichedMatterMap.get(m.matterNumber ?? ''); return ((em?.['matterBudget'] as number | undefined) ?? 0) > 0; });
 
   // Matters at risk
   const mattersAtRisk = filtered
@@ -821,7 +904,8 @@ export async function getMatterAnalysisData(
       let primaryIssue = `WIP age ${wipAge} days`;
       if (budgetBurn !== null && budgetBurn > 100) primaryIssue = `Budget ${Math.round(budgetBurn)}% consumed`;
       else if (realisation !== null && realisation < 70) primaryIssue = `Realisation ${Math.round(realisation)}%`;
-      const ragStatus = getRag(ragAssignments, 'F-WL-01', m.matterId ?? m.matterNumber ?? '');
+      const snap = matterByEntity.get(m.matterId ?? m.matterNumber ?? '');
+      const ragStatus = kpiRag(snap, 'F-WL-01');
       return {
         matterId: m.matterId ?? '',
         matterNumber: m.matterNumber ?? '',
@@ -837,7 +921,7 @@ export async function getMatterAnalysisData(
     })
     .slice(0, 20);
 
-  // Build time entry index per matter
+  // Build time entry / invoice index per matter
   const teByMatter = new Map<string, typeof timeEntries>();
   for (const te of timeEntries) {
     const teRec = te as unknown as Record<string, unknown>;
@@ -857,11 +941,12 @@ export async function getMatterAnalysisData(
 
   const rows: MatterRow[] = paged.map(m => {
     const em = enrichedMatterMap.get(m.matterId ?? '') ?? enrichedMatterMap.get(m.matterNumber ?? '');
+    const snap = matterByEntity.get(m.matterId ?? m.matterNumber ?? '');
     const budget = (em?.['matterBudget'] as number | undefined) ?? null;
     const budgetBurn = budget && budget > 0 ? (m.wipTotalBillable / budget) * 100 : null;
     const realisation = m.wipTotalBillable > 0 ? (m.invoicedNetBilling / m.wipTotalBillable) * 100 : null;
-    const profit = formulaResults['F-PR-01']?.entityResults?.[m.matterId ?? m.matterNumber ?? '']?.value ?? null;
-    const healthScore = formulaResults['F-CS-03']?.entityResults?.[m.matterId ?? m.matterNumber ?? '']?.value ?? null;
+    const profit = kpiNumOrNull(snap, 'F-PR-01');
+    const healthScore = kpiNumOrNull(snap, 'F-CS-03');
     const matterKey = m.matterNumber ?? m.matterId ?? '';
     const matterTEs = teByMatter.get(matterKey) ?? [];
     const matterInvs = invByMatter.get(matterKey) ?? [];
@@ -883,9 +968,9 @@ export async function getMatterAnalysisData(
       budgetBurn,
       budgetBurnRag: budgetBurn !== null ? applyRagThreshold(budgetBurn, getThresholdDefaults(ragThresholds, 'budgetBurn')) : null,
       realisation,
-      realisationRag: getRag(ragAssignments, 'F-RB-01', m.matterId ?? m.matterNumber ?? ''),
+      realisationRag: kpiRag(snap, 'F-RB-01'),
       healthScore,
-      healthRag: getRag(ragAssignments, 'F-CS-03', m.matterId ?? m.matterNumber ?? ''),
+      healthRag: kpiRag(snap, 'F-CS-03'),
       wipEntries: matterTEs.slice(0, 20).map(te => {
         const teRec = te as unknown as Record<string, unknown>;
         return { date: toDateString(teRec['date']) ?? '', lawyerName: (te.lawyerName ?? 'Unknown') as string, hours: (te.durationHours ?? 0) as number, value: (te.recordedValue ?? 0) as number, rate: (teRec['rate'] as number | undefined) ?? 0 };
@@ -941,10 +1026,10 @@ export async function getMatterAnalysisData(
   }
   const byDepartment = [...deptMatterMap.entries()].map(([name, v]) => ({ name, count: v.count, totalWip: v.totalWip, avgMargin: null }));
 
-  const allDepts = [...new Set(enrichedMatters.map(em => (em['department'] as string | undefined) ?? '').filter(Boolean))];
+  const allDepts     = [...new Set(enrichedMatters.map(em => (em['department'] as string | undefined) ?? '').filter(Boolean))];
   const allCaseTypes = [...new Set(enrichedMatters.map(em => (em['caseType'] as string | undefined) ?? '').filter(Boolean))];
-  const allStatuses = [...new Set(enrichedMatters.map(em => (em['matterStatus'] as string | undefined) ?? '').filter(Boolean))];
-  const allLawyers = [...new Set(enrichedMatters.map(em => (em['responsibleLawyer'] as string | undefined) ?? '').filter(Boolean))];
+  const allStatuses  = [...new Set(enrichedMatters.map(em => (em['matterStatus'] as string | undefined) ?? '').filter(Boolean))];
+  const allLawyers   = [...new Set(enrichedMatters.map(em => (em['responsibleLawyer'] as string | undefined) ?? '').filter(Boolean))];
 
   return {
     mattersAtRisk,
@@ -964,8 +1049,11 @@ export async function getClientIntelligenceData(
   firmId: string,
   filters: DashboardFilters = {},
 ): Promise<ClientPayload> {
+  const availableKeys = await getAvailableKpiKeys(firmId, 'client');
+  console.log('[dashboard/clients] client kpi_keys:', availableKeys);
+
   const data = await loadDashboardData(firmId);
-  const { clients, matters, enrichedMatters, invoices, formulaResults } = data;
+  const { clients, matters, enrichedMatters, invoices } = data;
 
   const enrichedMatterMap = new Map<string, Record<string, unknown>>();
   for (const em of enrichedMatters) {
@@ -1052,12 +1140,8 @@ export async function getClientIntelligenceData(
     };
   });
 
-  // Suppress unused variable warning
-  void formulaResults;
-
-  const sortedByRevenue = [...filteredClients].sort((a, b) => b.totalInvoiced - a.totalInvoiced);
+  const sortedByRevenue     = [...filteredClients].sort((a, b) => b.totalInvoiced - a.totalInvoiced);
   const sortedByOutstanding = [...filteredClients].sort((a, b) => b.totalOutstanding - a.totalOutstanding);
-
   const allDepts = [...new Set(enrichedMatters.map(em => (em['department'] as string | undefined) ?? '').filter(Boolean))];
 
   return {
