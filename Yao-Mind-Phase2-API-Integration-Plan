@@ -1,0 +1,2226 @@
+# Yao Mind — API Integration Plan
+## Phase 2: DataSourceAdapter + kpi_snapshots + Performance Refactor
+
+**Version 1.0 · April 2026 · Confidential**
+
+> ### How to Use This Document
+>
+> This document contains every Claude Code prompt needed to implement the Yao API integration,
+> the kpi_snapshots performance layer, and the risk flagging foundation.
+>
+> **Work through prompts in order.** Each builds on the previous.
+>
+> **After each prompt:** run the verification steps listed. Do not start the next prompt until
+> verification passes.
+>
+> **Reference documents:**
+> - `CLAUDE.md` — non-negotiable rules, patterns, field names
+> - `ARCHITECTURE.md` — full system design, entity model, formula domains
+>
+> **Environment:** Windows via WSL (`/mnt/c/Projects/yao-mind-bi`) and PowerShell
+> (`C:\Projects\yao-mind-bi`). All commands must be PowerShell-compatible.
+> Use `;` not `&&`. Use `Select-String` not `grep`. Use `Get-ChildItem` not `ls`.
+
+---
+
+## Table of Contents
+
+- [Phase 2A: Foundations](#phase-2a-foundations)
+  - [2A-01: Supabase Schema Extensions](#2a-01-supabase-schema-extensions)
+  - [2A-02: Encrypted Credential Store](#2a-02-encrypted-credential-store)
+  - [2A-03: MongoDB risk_flags Collection](#2a-03-mongodb-risk_flags-collection)
+- [Phase 2B: DataSourceAdapter — Fetch Layer](#phase-2b-datasourceadapter--fetch-layer)
+  - [2B-01: DataSourceAdapter Core + Auth](#2b-01-datasourceadapter-core--auth)
+  - [2B-02: Attorneys + Departments + Case Types (Lookup Fetchers)](#2b-02-attorneys--departments--case-types-lookup-fetchers)
+  - [2B-03: Matters Fetcher](#2b-03-matters-fetcher)
+  - [2B-04: Time Entries Fetcher](#2b-04-time-entries-fetcher)
+  - [2B-05: Invoices Fetcher](#2b-05-invoices-fetcher)
+  - [2B-06: Ledgers Fetcher + Router](#2b-06-ledgers-fetcher--router)
+  - [2B-07: Tasks + Contacts + Invoice Summary Fetchers](#2b-07-tasks--contacts--invoice-summary-fetchers)
+- [Phase 2C: Normalise Layer](#phase-2c-normalise-layer)
+  - [2C-01: Field Transformation Engine](#2c-01-field-transformation-engine)
+  - [2C-02: Lookup Map Builder + ObjectId Resolution](#2c-02-lookup-map-builder--objectid-resolution)
+  - [2C-03: Sensitive Field Stripper](#2c-03-sensitive-field-stripper)
+- [Phase 2D: Enrich Layer](#phase-2d-enrich-layer)
+  - [2D-01: WIP Aggregation per Matter and Fee Earner](#2d-01-wip-aggregation-per-matter-and-fee-earner)
+  - [2D-02: Invoice + Ledger Aggregation + datePaid Derivation](#2d-02-invoice--ledger-aggregation--datepaid-derivation)
+  - [2D-03: Fee Earner CSV Merge](#2d-03-fee-earner-csv-merge)
+  - [2D-04: Client Profile Builder](#2d-04-client-profile-builder)
+- [Phase 2E: kpi_snapshots Store](#phase-2e-kpi_snapshots-store)
+  - [2E-01: KpiSnapshotWriter Service](#2e-01-kpisnapshotwriter-service)
+  - [2E-02: Wire Formula Engine Output to kpi_snapshots](#2e-02-wire-formula-engine-output-to-kpi_snapshots)
+  - [2E-03: Dashboard KPI API Endpoint](#2e-03-dashboard-kpi-api-endpoint)
+- [Phase 2F: Risk Scanner](#phase-2f-risk-scanner)
+  - [2F-01: RiskScanner + risk_flags Writer](#2f-01-riskscanner--risk_flags-writer)
+  - [2F-02: Risk Flags API Endpoint](#2f-02-risk-flags-api-endpoint)
+- [Phase 2G: Pull Orchestrator + Background Function](#phase-2g-pull-orchestrator--background-function)
+  - [2G-01: Pull Status Tracking](#2g-01-pull-status-tracking)
+  - [2G-02: PullOrchestrator — Full Sequence](#2g-02-pullorchestrator--full-sequence)
+  - [2G-03: Netlify Background Function](#2g-03-netlify-background-function)
+  - [2G-04: Pull Trigger Endpoint](#2g-04-pull-trigger-endpoint)
+- [Phase 2H: Testing + Hardening](#phase-2h-testing--hardening)
+  - [2H-01: Integration Tests — DataSourceAdapter](#2h-01-integration-tests--datasourceadapter)
+  - [2H-02: End-to-End Pull Test with Real Lewis Denley Data](#2h-02-end-to-end-pull-test-with-real-lewis-denley-data)
+  - [2H-03: Performance Verification](#2h-03-performance-verification)
+
+---
+
+## Current State (before Phase 2)
+
+Phases 1A–1C are complete:
+- Supabase schema, RLS, auth middleware — all working
+- MongoDB collections, typed operations — all working
+- Entity registry (9 entities), formula registry (23 formulas + 5 snippets) — seeded
+- Configuration system (3 tiers), audit log — working
+- Legacy upload pipeline (8 stages, CSV/JSON) — working, 1,139+ tests passing
+- Formula engine, RAG engine, formula sandbox, AI translator — working
+- Calculated KPIs stored in MongoDB — working
+
+What Phase 2 adds:
+- Yao API integration (DataSourceAdapter)
+- kpi_snapshots table in Supabase (dashboard performance layer)
+- risk_flags collection in MongoDB
+- Pull orchestrator (Background Function)
+- Dashboards read from kpi_snapshots instead of triggering calculations
+
+---
+
+## Phase 2A: Foundations
+
+---
+
+### 2A-01: Supabase Schema Extensions
+
+**PROMPT:**
+
+```
+Add the following tables and columns to the Supabase schema.
+Create file: scripts/supabase-migration-004-api-integration.sql
+
+NEW TABLE: yao_api_credentials
+  - id: uuid PRIMARY KEY DEFAULT gen_random_uuid()
+  - firm_id: uuid REFERENCES firms(id) ON DELETE CASCADE UNIQUE
+  - encrypted_email: text NOT NULL
+  - encrypted_password: text NOT NULL
+  - encryption_key_id: text NOT NULL (references which key version was used)
+  - last_verified_at: timestamptz
+  - created_at: timestamptz DEFAULT now()
+  - updated_at: timestamptz DEFAULT now()
+
+  RLS: firm owner and admin can INSERT/UPDATE/SELECT their own firm's row only.
+  No DELETE (must use UPDATE to rotate credentials).
+
+NEW TABLE: kpi_snapshots
+  - id: uuid PRIMARY KEY DEFAULT gen_random_uuid()
+  - firm_id: uuid REFERENCES firms(id) ON DELETE CASCADE
+  - pulled_at: timestamptz NOT NULL
+  - entity_type: text NOT NULL
+    CHECK (entity_type IN ('feeEarner','matter','invoice','disbursement','department','client','firm'))
+  - entity_id: text NOT NULL
+  - entity_name: text NOT NULL
+  - kpi_key: text NOT NULL
+  - kpi_value: numeric
+  - rag_status: text CHECK (rag_status IN ('green','amber','red','neutral'))
+  - period: text NOT NULL DEFAULT 'current'
+  - display_value: text
+
+  RLS: firm users can SELECT their own firm's rows.
+  INSERT/UPDATE/DELETE: service role only (written by Netlify Background Function).
+
+  INDEXES:
+  - (firm_id, entity_type, period) — primary dashboard query pattern
+  - (firm_id, entity_id, kpi_key) — entity detail queries
+  - (firm_id, pulled_at DESC) — latest snapshot queries
+
+NEW TABLE: pull_status
+  - id: uuid PRIMARY KEY DEFAULT gen_random_uuid()
+  - firm_id: uuid REFERENCES firms(id) ON DELETE CASCADE UNIQUE
+  - status: text NOT NULL CHECK (status IN ('idle','running','complete','failed'))
+    DEFAULT 'idle'
+  - started_at: timestamptz
+  - completed_at: timestamptz
+  - pulled_at: timestamptz (when the data in kpi_snapshots was last successfully written)
+  - current_stage: text (e.g. 'Fetching matters', 'Calculating KPIs')
+  - records_fetched: jsonb DEFAULT '{}'::jsonb
+    (e.g. {"matters":842,"timeEntries":15420,"invoices":1203})
+  - records_processed: integer DEFAULT 0
+  - error: text
+
+  RLS: firm users can SELECT their own row. Service role writes.
+
+After creating the SQL:
+1. Run tsc --noEmit to confirm no type errors
+2. Commit: "feat: supabase migration 004 — yao_api_credentials, kpi_snapshots, pull_status"
+3. Push to GitHub
+```
+
+**Verify before proceeding:**
+- SQL file created at scripts/supabase-migration-004-api-integration.sql
+- All three tables defined with correct columns, constraints, and RLS
+- All indexes created on kpi_snapshots
+- tsc --noEmit passes
+
+---
+
+### 2A-02: Encrypted Credential Store
+
+**PROMPT:**
+
+```
+Build the credential management service for storing and retrieving Yao API credentials.
+
+Create: src/server/services/credential-service.ts
+
+Use AES-256-GCM encryption. The encryption key comes from environment variable
+YAO_CREDENTIAL_ENCRYPTION_KEY (32-byte hex string).
+
+Functions to implement:
+
+storeCredentials(firmId: string, email: string, password: string): Promise<void>
+  - Encrypts email and password separately using AES-256-GCM
+  - Each encrypted value includes: iv (12 bytes), authTag (16 bytes), ciphertext
+  - Stored as base64-encoded JSON: { iv, authTag, ciphertext }
+  - Upserts into yao_api_credentials table (one row per firm)
+  - Uses service role Supabase client (not anon key)
+  - Logs to audit_log: action 'credentials_updated', no values logged
+
+getCredentials(firmId: string): Promise<{ email: string; password: string }>
+  - Retrieves encrypted row from yao_api_credentials
+  - Decrypts both fields
+  - Returns plaintext email and password
+  - Throws if no credentials found for firm
+  - Never logs decrypted values
+
+verifyCredentials(firmId: string): Promise<boolean>
+  - Calls getCredentials, then attempts POST /attorneys/login
+  - Updates last_verified_at on success
+  - Returns true/false, does not throw
+  - Stores verification result in audit_log
+
+deleteCredentials(firmId: string, userId: string): Promise<void>
+  - Removes the row from yao_api_credentials
+  - Logs to audit_log
+
+Create Netlify Function: src/server/functions/yao-credentials.ts
+  POST /api/yao-credentials → store credentials (requires owner or admin role)
+  DELETE /api/yao-credentials → delete credentials (requires owner role)
+  GET /api/yao-credentials/verify → verify credentials work (returns { valid: boolean })
+
+Add to .env.example:
+  YAO_CREDENTIAL_ENCRYPTION_KEY=  # 32-byte hex string, generate with: openssl rand -hex 32
+  YAO_API_BASE_URL=https://api.yao.legal
+
+Write tests: tests/server/services/credential-service.test.ts
+  - Encrypt then decrypt returns original values
+  - Different firms cannot access each other's credentials
+  - Missing encryption key throws clear error
+  - getCredentials throws when no credentials stored
+
+Run tsc --noEmit ; commit "feat: encrypted credential store for Yao API" ; push
+```
+
+**Verify before proceeding:**
+- Encryption round-trip works (encrypt → decrypt returns original)
+- Tests pass
+- Netlify Function requires correct role
+- tsc --noEmit passes
+
+---
+
+### 2A-03: MongoDB risk_flags Collection
+
+**PROMPT:**
+
+```
+Add the risk_flags MongoDB collection to the existing setup.
+
+Update: scripts/mongodb-setup.ts
+
+Add collection: risk_flags
+  Indexes:
+    - { firm_id: 1, flagged_at: -1 }
+    - { firm_id: 1, flag_type: 1, severity: 1 }
+    - { firm_id: 1, entity_type: 1, entity_id: 1 }
+
+  Schema validation (MongoDB JSON Schema):
+    Required fields: firm_id, flagged_at, entity_type, entity_id, entity_name,
+                     flag_type, severity, detail, kpi_value, threshold
+
+Add TypeScript interface to src/shared/types/mongodb.ts:
+
+  interface RiskFlagDocument {
+    _id?: ObjectId;
+    firm_id: string;
+    flagged_at: Date;
+    entity_type: string;
+    entity_id: string;
+    entity_name: string;
+    flag_type: 'WIP_AGE_HIGH' | 'BUDGET_BURN_CRITICAL' | 'DEBTOR_DAYS_HIGH'
+              | 'UTILISATION_DROP' | 'DORMANT_MATTER' | 'BAD_DEBT_RISK' | 'WRITE_OFF_SPIKE';
+    severity: 'high' | 'medium' | 'low';
+    detail: string;
+    kpi_value: number;
+    threshold: number;
+    ai_summary?: string;
+  }
+
+Add to src/server/lib/mongodb-operations.ts:
+
+  storeRiskFlags(firmId: string, flags: RiskFlagDocument[]): Promise<void>
+    - Deletes all existing risk flags for this firm first (replace on each pull)
+    - Inserts new flags
+    - Includes firmId in all queries
+
+  getRiskFlags(firmId: string, options?: {
+    severity?: 'high' | 'medium' | 'low';
+    entity_type?: string;
+    flag_type?: string;
+    limit?: number;
+  }): Promise<RiskFlagDocument[]>
+    - Returns flags sorted by severity (high first) then flagged_at DESC
+
+Run tsc --noEmit ; commit "feat: risk_flags MongoDB collection and operations" ; push
+```
+
+**Verify before proceeding:**
+- Collection added to setup script with correct indexes
+- RiskFlagDocument interface compiles cleanly
+- storeRiskFlags and getRiskFlags are properly typed
+- tsc --noEmit passes
+
+---
+
+## Phase 2B: DataSourceAdapter — Fetch Layer
+
+---
+
+### 2B-01: DataSourceAdapter Core + Auth
+
+**PROMPT:**
+
+```
+Create the DataSourceAdapter core with authentication.
+
+Create: src/server/datasource/DataSourceAdapter.ts
+
+This is the main class that orchestrates all Yao API interactions.
+It is instantiated once per pull with a firmId and handles all API communication.
+
+class DataSourceAdapter {
+  private firmId: string;
+  private token: string | null = null;
+  private baseUrl: string;  // from YAO_API_BASE_URL env var
+
+  constructor(firmId: string)
+
+  async authenticate(): Promise<void>
+    - Calls credentialService.getCredentials(this.firmId)
+    - POST {baseUrl}/attorneys/login with { email, password }
+    - Response contains JWT token — search for it in: access_token, token, jwt,
+      accessToken, authToken, or any key containing 'token' (case-insensitive)
+    - Stores token in this.token
+    - Throws YaoAuthError if login fails or token not found in response
+    - Never logs credentials or token value
+
+  private async request<T>(
+    method: 'GET' | 'POST',
+    path: string,
+    options?: { params?: Record<string, string>; body?: object }
+  ): Promise<T>
+    - Throws if this.token is null (must call authenticate() first)
+    - Adds Authorization: Bearer {token} header
+    - Handles 401: throws YaoAuthExpiredError (token expired mid-pull)
+    - Handles 429: waits 2 seconds and retries once
+    - Handles 5xx: throws YaoApiError with status code and message
+    - Parses JSON response, returns typed T
+
+  async paginateGet<T>(
+    path: string,
+    params: Record<string, string>,
+    resultKey: string,
+    limit: number = 100
+  ): Promise<T[]>
+    - Loops GET requests incrementing page param
+    - Stops when result array length < limit
+    - resultKey is the response field containing the array (e.g. 'rows', 'items')
+    - Returns all collected records
+
+  async paginatePost<T>(
+    path: string,
+    body: object,
+    resultKey: string,
+    pageKey: 'page' | 'next',
+    size: number = 100
+  ): Promise<T[]>
+    - For pageKey='page': loops incrementing page, stops when result < size
+    - For pageKey='next': cursor pagination — sends next value from previous response,
+      stops when next is absent/null in response
+    - resultKey is the response field containing the array (e.g. 'result')
+    - Returns all collected records
+}
+
+Create custom errors: src/server/datasource/errors.ts
+  - YaoAuthError (login failed)
+  - YaoAuthExpiredError (token expired mid-pull)
+  - YaoApiError (HTTP error from API)
+  - YaoRateLimitError (429 after retry)
+
+Create: src/server/datasource/index.ts
+  - Exports DataSourceAdapter and all error types
+
+Write tests: tests/server/datasource/DataSourceAdapter.test.ts
+  - authenticate() extracts token from various response shapes
+  - request() adds correct Authorization header
+  - paginateGet() stops correctly when result < limit
+  - paginatePost() with cursor stops when next is absent
+  - 429 retry logic works
+  - authenticate() never logs credentials (spy on console methods)
+
+Run tsc --noEmit ; commit "feat: DataSourceAdapter core with auth and pagination" ; push
+```
+
+**Verify before proceeding:**
+- DataSourceAdapter class is well-typed
+- Pagination loops stop correctly in tests
+- Error types are exported and usable
+- Token extraction handles multiple response shapes
+- Tests pass, tsc --noEmit passes
+
+---
+
+### 2B-02: Attorneys + Departments + Case Types (Lookup Fetchers)
+
+**PROMPT:**
+
+```
+Add the lookup table fetchers to DataSourceAdapter. These fetch small reference datasets
+once per pull and build in-memory maps used to resolve ObjectId references.
+
+Add to src/server/datasource/DataSourceAdapter.ts:
+
+Types (create in src/server/datasource/types.ts):
+
+  interface YaoAttorney {
+    _id: string;
+    name: string;
+    surname: string;
+    status: 'ACTIVE' | 'PENDING' | 'DISABLED';
+    email: string;
+    job_title?: string;
+    phone?: string;
+    integration_account_id?: string;
+    integration_account_code?: string;
+    rates: Array<{ label: string; value: number; default: boolean }>;
+    law_firm: string;
+    created_at: string;
+    updated_at: string;
+    // DO NOT include: password, email_default_signature
+  }
+
+  interface YaoDepartment {
+    _id: string;
+    title: string;
+    law_firm: string;
+    is_deleted: boolean;
+  }
+
+  interface YaoCaseType {
+    _id: string;
+    title: string;
+    fixed_fee?: number;
+    law_firm: string;
+    department: { _id: string; title: string; is_deleted: boolean };
+    is_deleted: boolean;
+  }
+
+  interface AttorneyMap {
+    [id: string]: {
+      fullName: string;
+      firstName: string;
+      lastName: string;
+      email: string;
+      status: string;
+      defaultRate: number | null;
+      allRates: Array<{ label: string; value: number; default: boolean }>;
+      integrationAccountId: string | null;
+      integrationAccountCode: string | null;
+      jobTitle: string | null;
+    }
+  }
+
+  interface DepartmentMap { [id: string]: string }  // id → title
+
+  interface CaseTypeMap {
+    [id: string]: {
+      title: string;
+      departmentId: string;
+      departmentTitle: string;
+      isFixedFee: boolean;
+      fixedFeeValue: number | null;
+    }
+  }
+
+Methods to add to DataSourceAdapter:
+
+  async fetchAttorneys(): Promise<YaoAttorney[]>
+    - GET /attorneys (no pagination — returns full array)
+    - Strip password and email_default_signature from EVERY record before returning
+    - Include DISABLED attorneys (needed for historical data)
+
+  async fetchDepartments(): Promise<YaoDepartment[]>
+    - GET /departments
+    - Return all (including is_deleted — let caller filter)
+
+  async fetchCaseTypes(): Promise<YaoCaseType[]>
+    - GET /case-types/active
+
+  buildAttorneyMap(attorneys: YaoAttorney[]): AttorneyMap
+    - Keyed by _id
+    - fullName = name + ' ' + surname
+    - defaultRate = rates.find(r => r.default)?.value ?? null
+    - Maps all fields (excludes password, email_default_signature)
+
+  buildDepartmentMap(departments: YaoDepartment[]): DepartmentMap
+    - Keyed by _id → title
+    - Filter: is_deleted === false
+
+  buildCaseTypeMap(caseTypes: YaoCaseType[]): CaseTypeMap
+    - Keyed by _id
+    - isFixedFee = (fixed_fee ?? 0) > 0
+    - Includes department info from nested object
+
+  async fetchLookupTables(): Promise<{
+    attorneys: YaoAttorney[];
+    departments: YaoDepartment[];
+    caseTypes: YaoCaseType[];
+    attorneyMap: AttorneyMap;
+    departmentMap: DepartmentMap;
+    caseTypeMap: CaseTypeMap;
+  }>
+    - Fetches all three in parallel using Promise.all
+    - Builds and returns all three maps
+    - Logs counts to pull_status progress
+
+Write tests: tests/server/datasource/lookup-fetchers.test.ts
+  - buildAttorneyMap correctly strips password field
+  - buildAttorneyMap sets fullName correctly
+  - buildAttorneyMap handles missing rates gracefully (defaultRate = null)
+  - buildDepartmentMap excludes is_deleted departments
+  - buildCaseTypeMap sets isFixedFee correctly
+  - fetchLookupTables calls all three fetchers in parallel
+
+Run tsc --noEmit ; commit "feat: lookup table fetchers and map builders" ; push
+```
+
+**Verify before proceeding:**
+- password and email_default_signature never appear in AttorneyMap
+- All maps are correctly typed
+- Parallel fetch works
+- Tests pass, tsc --noEmit passes
+
+---
+
+### 2B-03: Matters Fetcher
+
+**PROMPT:**
+
+```
+Add the matters fetcher to DataSourceAdapter.
+
+Add to src/server/datasource/types.ts:
+
+  interface YaoMatter {
+    _id: string;
+    number: number;
+    number_string?: string;
+    status: string;
+    case_name: string;
+    financial_limit: number;  // = budget
+    rate: number | null;      // null at matter level — rate lives on lawyer
+    client_account_balance: number;
+    office_account_balance: number;
+    linked_account_balance: number;
+    source?: string;
+    source_contact_name?: string;
+    private?: boolean;
+    responsible_lawyer?: {
+      _id: string; name: string; surname: string;
+      rates: Array<{ label: string; value: number; default: boolean }>;
+    };
+    responsible_supervisor?: {
+      _id: string; name: string; surname: string;
+      rates: Array<{ label: string; value: number; default: boolean }>;
+    };
+    paralegal?: {
+      _id: string; name: string; surname: string;
+      rates: Array<{ label: string; value: number; default: boolean }>;
+    };
+    department?: { _id: string; title: string };
+    case_type?: { _id: string; title: string };
+    clients: Array<{
+      contact: {
+        _id: string; type: string; display_name: string;
+        first_name?: string; last_name?: string; company_name?: string;
+      }
+    }>;
+    case_contacts: Array<{
+      category: string;
+      contact: { _id: string; display_name: string; type: string };
+      reference?: string;
+    }>;
+    last_status_update?: string;
+    in_progress_date?: string;
+    completed_date?: string;
+    archived_date?: string;
+    created_at: string;
+    updated_at: string;
+    law_firm: { _id: string; name: string } | string;
+  }
+
+Add method to DataSourceAdapter:
+
+  async fetchMatters(): Promise<YaoMatter[]>
+    - GET /matters with pagination: page param (required), limit=100
+    - Uses paginateGet() with resultKey='rows'
+    - IMPORTANT: page is a required query param — first request is page=1
+    - Loop until rows.length < limit
+    - Strip password and email_default_signature from any nested attorney objects
+    - Return all matters
+
+Write tests: tests/server/datasource/matters-fetcher.test.ts
+  - Pagination stops when rows.length < limit
+  - Handles law_firm as both object and string
+  - Nested attorney objects have password stripped
+  - Handles empty response gracefully (no matters)
+
+Run tsc --noEmit ; commit "feat: matters fetcher" ; push
+```
+
+**Verify before proceeding:**
+- Pagination logic correct (page param required)
+- law_firm handled as both object and string reference
+- Tests pass, tsc --noEmit passes
+
+---
+
+### 2B-04: Time Entries Fetcher
+
+**PROMPT:**
+
+```
+Add the time entries fetcher to DataSourceAdapter.
+
+Add to src/server/datasource/types.ts:
+
+  interface YaoTimeEntry {
+    _id: string;
+    description: string;
+    do_not_bill: boolean;
+    rate: number;
+    client_rate?: number;
+    units: number;
+    duration_minutes: number;
+    billable: number;
+    write_off: number;
+    status: 'ACTIVE' | 'CONSOLIDATED' | 'CONSOLIDATION_TARGET';
+    work_type?: string;
+    activity?: { _id: string; title: string; measure: string };
+    matter: { _id: string; number: number; case_name: string; law_firm: string };
+    assignee?: {
+      _id: string; name: string; surname: string;
+      // Strip: password, email_default_signature
+    };
+    invoice?: string;
+    date: string;
+    created_at: string;
+    updated_at: string;
+  }
+
+Add method to DataSourceAdapter:
+
+  async fetchTimeEntries(): Promise<YaoTimeEntry[]>
+    - POST /time-entries/search with cursor pagination
+    - Initial body: { size: 100 }
+    - Subsequent bodies: { size: 100, next: <value from previous response> }
+    - Response shape: { result: YaoTimeEntry[], next?: number }
+    - Uses paginatePost() with pageKey='next', resultKey='result'
+    - Loop until 'next' is absent or null in response
+    - Strip password and email_default_signature from assignee objects
+    - Only include status: ACTIVE records (exclude CONSOLIDATED, CONSOLIDATION_TARGET)
+      unless firm config says otherwise
+
+Write tests: tests/server/datasource/time-entries-fetcher.test.ts
+  - Cursor pagination stops when next is absent
+  - Cursor value passed correctly to next request
+  - Consolidated entries are excluded
+  - assignee.password is stripped
+  - Handles activity being null/undefined gracefully
+
+Run tsc --noEmit ; commit "feat: time entries fetcher" ; push
+```
+
+**Verify before proceeding:**
+- Cursor pagination implemented correctly (not page-based)
+- CONSOLIDATED entries excluded
+- Sensitive fields stripped
+- Tests pass, tsc --noEmit passes
+
+---
+
+### 2B-05: Invoices Fetcher
+
+**PROMPT:**
+
+```
+Add the invoices fetcher to DataSourceAdapter.
+
+Add to src/server/datasource/types.ts:
+
+  interface YaoInvoice {
+    _id: string;
+    invoice_number: number;
+    invoice_date: string;
+    due_date: string;
+    subtotal: number;
+    total_disbursements: number;
+    total_other_fees: number;
+    total_firm_fees: number;
+    write_off: number;
+    total: number;
+    outstanding: number;
+    paid: number;
+    credited: number;
+    written_off: number;
+    vat: number;
+    vat_percentage: number;
+    less_paid_on_account: number;
+    billable_entries: number;
+    time_entries_override_value: number;
+    status: string;
+    type: string;
+    clients: Array<{
+      _id: string; display_name: string;
+      first_name?: string; last_name?: string;
+    }>;
+    solicitor?: { _id: string; name: string };
+    matter?: { _id: string; number: number; case_name: string };
+    narrative?: string;
+    reference?: string;
+    integration_id?: string;
+    account_code?: string;
+    history?: Array<{
+      _id: string; name?: string; description: string;
+      created_at: string; type: string;
+    }>;
+    created_at: string;
+    updated_at: string;
+  }
+
+Add methods to DataSourceAdapter:
+
+  async fetchInvoices(): Promise<YaoInvoice[]>
+    - POST /invoices/search with page pagination
+    - Body: { size: 100, page: N }
+    - Uses paginatePost() with pageKey='page', resultKey not needed (array at root)
+    - IMPORTANT: response for invoices search is a root-level array, not wrapped
+    - Loop until result length < size
+    - Include all statuses (DRAFT, ISSUED, PAID, CREDITED, WRITTEN_OFF, CANCELED)
+
+  async fetchInvoiceSummary(): Promise<{ unpaid: number; paid: number; total: number }>
+    - GET /invoices/summary
+    - Single call, no pagination
+    - Returns { unpaid, paid, total }
+
+Write tests: tests/server/datasource/invoices-fetcher.test.ts
+  - Page pagination stops correctly
+  - All statuses included (not just ISSUED/PAID)
+  - fetchInvoiceSummary returns correct shape
+  - Handles missing solicitor gracefully
+
+Run tsc --noEmit ; commit "feat: invoices fetcher" ; push
+```
+
+**Verify before proceeding:**
+- Both fetchers typed correctly
+- Pagination handles root-level array response
+- Tests pass, tsc --noEmit passes
+
+---
+
+### 2B-06: Ledgers Fetcher + Router
+
+**PROMPT:**
+
+```
+Add the ledgers fetcher and routing logic to DataSourceAdapter.
+This is the most complex fetcher — records must be routed into different
+destination entities based on their type and field content.
+
+Add to src/server/datasource/types.ts:
+
+  interface YaoLedger {
+    _id: string;
+    type: string;
+    value: number;
+    vat: number;
+    vat_percentage: number;
+    subtotal: number;
+    outstanding: number;
+    paid: number;
+    status: string;
+    notes?: string;
+    reference?: string;
+    payee?: string;
+    tax_treatment?: string;
+    supplier_vat?: number;
+    date: string;
+    law_firm: string;
+    author?: { _id: string; name: string };
+    bank_account?: { _id: string; name: string; account_number?: string };
+    account_type?: string;
+    matter?: { _id: string; number: number; case_name: string };
+    invoice?: string;    // invoice _id as string reference
+    transfer_id?: string;
+    disbursements?: Array<{ _id: string; value: number }>;
+    integration_id?: string;
+    account_id?: string;
+    created_at: string;
+    updated_at: string;
+  }
+
+  interface RoutedLedgers {
+    disbursements: YaoLedger[];        // OFFICE_PAYMENT records
+    invoicePayments: YaoLedger[];      // CLIENT_TO_OFFICE or OFFICE_RECEIPT with invoice populated
+    disbursementRecoveries: YaoLedger[]; // CLIENT_TO_OFFICE or OFFICE_RECEIPT with disbursements[] populated
+  }
+
+Add methods to DataSourceAdapter:
+
+  async fetchLedgers(): Promise<YaoLedger[]>
+    - POST /ledgers/search
+    - Body: { types: ["OFFICE_PAYMENT", "CLIENT_TO_OFFICE", "OFFICE_RECEIPT"], size: 100, page: N }
+    - Uses paginatePost() with pageKey='page'
+    - Response is root-level array
+
+  routeLedgers(ledgers: YaoLedger[]): RoutedLedgers
+    - Pure function (no async, no side effects)
+    - OFFICE_PAYMENT → disbursements[]
+    - CLIENT_TO_OFFICE or OFFICE_RECEIPT:
+        If invoice populated AND disbursements empty → invoicePayments[]
+        If disbursements[] populated AND invoice empty → disbursementRecoveries[]
+        If BOTH invoice AND disbursements[] populated →
+          add to BOTH invoicePayments[] AND disbursementRecoveries[]
+          (same record appears in both — this is intentional)
+        If NEITHER → discard (log count for diagnostics)
+
+Write tests: tests/server/datasource/ledgers-fetcher.test.ts
+  - OFFICE_PAYMENT routes to disbursements
+  - CLIENT_TO_OFFICE with invoice → invoicePayments
+  - OFFICE_RECEIPT with disbursements[] → disbursementRecoveries
+  - Record with both invoice and disbursements[] appears in BOTH destinations
+  - Record with neither is discarded
+  - Pagination filters to correct types
+
+Run tsc --noEmit ; commit "feat: ledgers fetcher and router" ; push
+```
+
+**Verify before proceeding:**
+- Routing logic handles all 4 cases correctly
+- Split records appear in both destinations
+- Tests cover all routing cases
+- tsc --noEmit passes
+
+---
+
+### 2B-07: Tasks + Contacts + Invoice Summary Fetchers
+
+**PROMPT:**
+
+```
+Add the remaining fetchers to DataSourceAdapter.
+
+Add to src/server/datasource/types.ts:
+
+  interface YaoTask {
+    _id: string;
+    title: string;
+    priority: string;
+    status: string;
+    category?: string;
+    due_date?: string | null;
+    completed_date?: string | null;
+    description?: string;
+    estimate_time?: number;
+    notify_flag: boolean;
+    matter?: { _id: string; number: number; case_name: string };
+    assigned_to?: {
+      _id: string; name: string; surname: string;
+      status: string; email: string;
+      // Strip: password, email_default_signature
+    };
+    created_at: string;
+    updated_at: string;
+  }
+
+  interface YaoContact {
+    _id: string;
+    type: 'Person' | 'Company';
+    display_name: string;
+    first_name?: string;
+    middle_name?: string;
+    last_name?: string;
+    company_name?: string;
+    email?: string;
+    mobile_phone?: string;
+    work_phone?: string;
+    address?: {
+      address_line_1?: string; city?: string; postal_code?: string; country?: string;
+    };
+    tags?: string[];
+    is_archived: boolean;
+    law_firm: string;
+    created_at: string;
+    updated_at: string;
+  }
+
+Add methods to DataSourceAdapter:
+
+  async fetchTasks(): Promise<YaoTask[]>
+    - GET /tasks with page pagination
+    - Params: { page: N, limit: '100' }
+    - Strip password and email_default_signature from assigned_to
+    - Include all statuses (TO_DO, IN_PROGRESS, COMPLETED — exclude DELETED)
+
+  async fetchContacts(): Promise<YaoContact[]>
+    - GET /contacts with pagination
+    - Params: { is_archived: 'false', ids_filter: '[]', tag: '', company: '', page: N, limit: '100' }
+    - Only active contacts (is_archived=false)
+
+  Add fetchAll() method to DataSourceAdapter:
+    async fetchAll(): Promise<{
+      attorneys: YaoAttorney[];
+      departments: YaoDepartment[];
+      caseTypes: YaoCaseType[];
+      matters: YaoMatter[];
+      timeEntries: YaoTimeEntry[];
+      invoices: YaoInvoice[];
+      ledgers: RoutedLedgers;
+      tasks: YaoTask[];
+      contacts: YaoContact[];
+      invoiceSummary: { unpaid: number; paid: number; total: number };
+      maps: { attorneyMap: AttorneyMap; departmentMap: DepartmentMap; caseTypeMap: CaseTypeMap };
+    }>
+      Step 1: fetchLookupTables() (attorneys, departments, caseTypes in parallel)
+      Step 2: fetch matters, timeEntries, invoices, ledgers, tasks, contacts in parallel
+              using Promise.all — all depend on lookup maps being ready but not on each other
+      Step 3: fetchInvoiceSummary()
+      Step 4: routeLedgers()
+      Updates pull_status.records_fetched after each dataset completes
+
+Write tests: tests/server/datasource/tasks-contacts-fetchers.test.ts
+  - Tasks excludes DELETED status
+  - Tasks assigned_to.password is stripped
+  - Contacts filters to is_archived=false
+  - fetchAll returns all expected keys
+  - fetchAll fetches Step 2 datasets in parallel (use timing or Promise.all spy)
+
+Run tsc --noEmit ; commit "feat: tasks, contacts fetchers and fetchAll orchestration" ; push
+```
+
+**Verify before proceeding:**
+- All fetchers typed correctly
+- fetchAll parallelises step 2 correctly
+- DELETED tasks excluded
+- Tests pass, tsc --noEmit passes
+
+---
+
+## Phase 2C: Normalise Layer
+
+---
+
+### 2C-01: Field Transformation Engine
+
+**PROMPT:**
+
+```
+Build the field transformation engine that applies all 12 transformation rules
+to raw API records before they enter the enrichment layer.
+
+Create: src/server/datasource/normalise/transformations.ts
+
+Implement these pure transformation functions:
+
+transformAttorney(raw: YaoAttorney): NormalisedAttorney
+  - fullName = name + ' ' + surname
+  - defaultRate = rates.find(r => r.default)?.value ?? null
+  - Strips: password, email_default_signature (belt-and-suspenders — should be gone by now)
+
+transformMatter(raw: YaoMatter, maps: LookupMaps): NormalisedMatter
+  - budget = financial_limit
+  - isActive = status IN ['IN_PROGRESS','ON_HOLD','EXCHANGED','QUOTE']
+  - isClosed = status IN ['COMPLETED','ARCHIVED','CLOSED']
+  - isFixedFee = maps.caseTypeMap[case_type?._id]?.isFixedFee ?? false
+  - responsibleLawyerId = responsible_lawyer?._id ?? null
+  - responsibleLawyerName = responsible_lawyer? name + surname ?? null
+  - responsibleLawyerRate = responsible_lawyer?.rates?.find(r=>r.default)?.value ?? null
+  - supervisorId = responsible_supervisor?._id ?? null
+  - supervisorName = responsible_supervisor? name + surname ?? null
+  - paralegalId = paralegal?._id ?? null
+  - paralegalName = paralegal? name + surname ?? null
+  - departmentId = department?._id ?? null
+  - departmentName = department?.title ?? maps.departmentMap[department?._id] ?? null
+  - caseTypeId = case_type?._id ?? null
+  - caseTypeName = case_type?.title ?? maps.caseTypeMap[case_type?._id]?.title ?? null
+  - primaryClientId = clients?.[0]?.contact?._id ?? null
+  - primaryClientName = clients?.[0]?.contact?.display_name ?? null
+  - clientIds = clients?.map(c => c.contact._id) ?? []
+  - clientNames = clients?.map(c => c.contact.display_name) ?? []
+  - lawFirmId = typeof law_firm === 'object' ? law_firm._id : law_firm
+
+transformTimeEntry(raw: YaoTimeEntry): NormalisedTimeEntry
+  - activityType = activity?.title ?? work_type ?? null
+  - durationHours = duration_minutes / 60
+  - isChargeable = !do_not_bill && billable > 0
+  - recordedValue = billable + write_off
+  - lawyerId = assignee?._id ?? null
+  - lawyerName = assignee? name + ' ' + surname ?? null
+  - matterId = matter._id
+  - matterNumber = matter.number
+
+transformInvoice(raw: YaoInvoice): NormalisedInvoice
+  - responsibleLawyerId = solicitor?._id ?? null
+  - responsibleLawyerName = solicitor?.name ?? null
+  - matterId = matter?._id ?? null
+  - matterNumber = matter?.number ?? null
+  - primaryClientId = clients?.[0]?._id ?? null
+  - primaryClientName = clients?.[0]?.display_name ?? null
+  - clientIds = clients?.map(c => c._id) ?? []
+  - clientNames = clients?.map(c => c.display_name) ?? []
+  - datePaid = null (populated later in enrichment from ledger routing)
+
+transformDisbursement(raw: YaoLedger): NormalisedDisbursement
+  - transactionId = _id
+  - subtotal = Math.abs(value)
+  - vatAmount = Math.abs(vat)
+  - firmExposure = outstanding < 0 ? Math.abs(outstanding) : 0
+  - isRecovered = outstanding === 0
+  - description = reference ?? null
+  - supplierId = payee ?? null  (who was paid)
+  - matterId = matter?._id ?? null
+  - matterNumber = matter?.number ?? null
+  - responsibleLawyerId = author?._id ?? null
+  - responsibleLawyerName = author?.name ?? null
+
+transformTask(raw: YaoTask): NormalisedTask
+  - taskId = _id
+  - lawyerId = assigned_to?._id ?? null
+  - lawyerName = assigned_to? name + ' ' + surname ?? null
+  - matterId = matter?._id ?? null
+  - matterNumber = matter?.number ?? null
+  - isOverdue = status !== 'COMPLETED' && due_date !== null && new Date(due_date) < new Date()
+
+transformContact(raw: YaoContact): NormalisedContact
+  - contactId = _id
+  - displayName = display_name
+  - isCompany = type === 'Company'
+  - primaryEmail = email ?? null
+  - primaryPhone = mobile_phone ?? work_phone ?? null
+
+Create TypeScript interfaces for all Normalised* types in:
+  src/server/datasource/normalise/types.ts
+
+Write tests: tests/server/datasource/normalise/transformations.test.ts
+  - Each transformation with complete input returns correct output
+  - Each transformation handles null/missing optional fields gracefully
+  - transformMatter isActive and isClosed are mutually exclusive
+  - transformTimeEntry durationHours is correct
+  - transformDisbursement firmExposure is 0 when outstanding >= 0
+  - transformTask isOverdue only when not completed and past due date
+
+Run tsc --noEmit ; commit "feat: field transformation engine for all entity types" ; push
+```
+
+**Verify before proceeding:**
+- All 7 transform functions compile without type errors
+- All Normalised* interfaces are complete
+- Edge cases (null fields) handled in every function
+- Tests pass, tsc --noEmit passes
+
+---
+
+### 2C-02: Lookup Map Builder + ObjectId Resolution
+
+**PROMPT:**
+
+```
+Build the ObjectId resolution layer that enriches normalised records
+using the in-memory lookup maps built from attorneys, departments, and case types.
+
+Create: src/server/datasource/normalise/resolver.ts
+
+interface LookupMaps {
+  attorneyMap: AttorneyMap;
+  departmentMap: DepartmentMap;
+  caseTypeMap: CaseTypeMap;
+}
+
+function resolveTimeEntryEnrichment(entry: NormalisedTimeEntry, maps: LookupMaps): NormalisedTimeEntry
+  - If lawyerId is set: enrich from attorneyMap[lawyerId]:
+    - lawyerDefaultRate
+    - lawyerStatus
+    - lawyerIntegrationId
+  - Return enriched record (never mutate input — return new object)
+
+function resolveMatterEnrichment(matter: NormalisedMatter, maps: LookupMaps): NormalisedMatter
+  - Fill any missing department/caseType names from maps
+  - Fill any missing lawyer names from attorneyMap if only IDs are present
+  - Return enriched record
+
+function resolveInvoiceEnrichment(invoice: NormalisedInvoice, maps: LookupMaps): NormalisedInvoice
+  - Enrich solicitor details from attorneyMap if only ID is present
+  - Return enriched record
+
+function resolveAll(
+  data: {
+    matters: NormalisedMatter[];
+    timeEntries: NormalisedTimeEntry[];
+    invoices: NormalisedInvoice[];
+    disbursements: NormalisedDisbursement[];
+    tasks: NormalisedTask[];
+  },
+  maps: LookupMaps
+): typeof data
+  - Applies all resolution functions to all records
+  - Returns new data object with all resolved records
+  - Logs resolution statistics: how many records had each field filled by map lookup
+
+Write tests: tests/server/datasource/normalise/resolver.test.ts
+  - resolveTimeEntryEnrichment fills lawyer rate from map
+  - resolveAll returns new objects (does not mutate inputs)
+  - Missing map entry is handled gracefully (field stays null)
+  - Resolution stats include correct counts
+
+Run tsc --noEmit ; commit "feat: ObjectId resolution using lookup maps" ; push
+```
+
+**Verify before proceeding:**
+- Resolution functions are pure (no mutation)
+- Missing map entries handled gracefully
+- Tests pass, tsc --noEmit passes
+
+---
+
+### 2C-03: Sensitive Field Stripper
+
+**PROMPT:**
+
+```
+Build a defensive sensitive field stripper that runs as the final normalise step.
+This provides belt-and-suspenders protection — fields should already be stripped
+earlier, but this catches anything that slipped through.
+
+Create: src/server/datasource/normalise/stripper.ts
+
+const SENSITIVE_FIELDS = ['password', 'email_default_signature'];
+
+function stripSensitiveFields<T extends object>(record: T): T
+  - Removes any keys matching SENSITIVE_FIELDS (case-insensitive)
+  - Recursively strips nested objects and arrays of objects
+  - Returns new object — does not mutate input
+  - Works on any depth of nesting
+
+function stripSensitiveFromArray<T extends object>(records: T[]): T[]
+  - Maps stripSensitiveFields over array
+
+function auditSensitiveFieldPresence(records: object[]): { fieldName: string; count: number }[]
+  - Scans records for any remaining sensitive fields BEFORE stripping
+  - Returns list of any found fields with occurrence count
+  - Used for logging/alerting — if this returns anything non-empty, log a warning
+
+Write tests: tests/server/datasource/normalise/stripper.test.ts
+  - Strips password from top-level object
+  - Strips email_default_signature recursively from nested objects
+  - Does not mutate input
+  - auditSensitiveFieldPresence detects both fields correctly
+  - Returns empty array when no sensitive fields present
+
+Run tsc --noEmit ; commit "feat: defensive sensitive field stripper" ; push
+```
+
+**Verify before proceeding:**
+- Recursive stripping works at any depth
+- Input objects are not mutated
+- Tests pass, tsc --noEmit passes
+
+---
+
+## Phase 2D: Enrich Layer
+
+---
+
+### 2D-01: WIP Aggregation per Matter and Fee Earner
+
+**PROMPT:**
+
+```
+Build WIP aggregation — calculates per-matter and per-fee-earner WIP totals
+from normalised time entries.
+
+Create: src/server/datasource/enrich/wip-aggregator.ts
+
+interface WipSummary {
+  totalHours: number;
+  chargeableHours: number;
+  nonChargeableHours: number;
+  totalBillable: number;
+  totalWriteOff: number;
+  totalRecorded: number;
+  entryCount: number;
+  lastEntryDate: string | null;
+  activityBreakdown: Record<string, { hours: number; value: number }>;
+}
+
+function aggregateWipByMatter(timeEntries: NormalisedTimeEntry[]): Map<string, WipSummary>
+  - Groups by matterId (string, Yao _id)
+  - Returns Map<matterId, WipSummary>
+  - Entries with no matterId are collected separately as orphaned (should be 0 via API)
+
+function aggregateWipByFeeEarner(timeEntries: NormalisedTimeEntry[]): Map<string, WipSummary>
+  - Groups by lawyerId (string, Yao _id)
+  - Entries with no lawyerId grouped under '__unknown__'
+
+function computeRecordingGapDays(
+  timeEntries: NormalisedTimeEntry[],
+  lawyerId: string,
+  referenceDate?: Date
+): number
+  - Finds the most recent entry date for this lawyerId
+  - Returns days between lastEntryDate and referenceDate (default: today)
+  - Returns 0 if entry found today, null if no entries at all
+
+function buildWipEnrichment(timeEntries: NormalisedTimeEntry[]): {
+  byMatter: Map<string, WipSummary>;
+  byFeeEarner: Map<string, WipSummary>;
+  orphaned: NormalisedTimeEntry[];
+  totalStats: WipSummary;
+}
+
+Write tests: tests/server/datasource/enrich/wip-aggregator.test.ts
+  - Correct totals for mixed chargeable/non-chargeable entries
+  - activityBreakdown groups by activityType correctly
+  - computeRecordingGapDays returns 0 for entry today
+  - Entries with no matterId go to orphaned (should be minimal via API)
+
+Run tsc --noEmit ; commit "feat: WIP aggregation by matter and fee earner" ; push
+```
+
+**Verify before proceeding:**
+- WipSummary interface complete and well-typed
+- activityBreakdown correctly populated
+- Tests pass, tsc --noEmit passes
+
+---
+
+### 2D-02: Invoice + Ledger Aggregation + datePaid Derivation
+
+**PROMPT:**
+
+```
+Build invoice aggregation and datePaid derivation from ledger records.
+
+Create: src/server/datasource/enrich/invoice-enricher.ts
+
+function deriveInvoiceDatePaid(
+  invoice: NormalisedInvoice,
+  invoicePayments: YaoLedger[]
+): string | null
+  - Finds any invoicePayments record where ledger.invoice === invoice._id
+  - If found: returns ledger.date (ISO string)
+  - If multiple found: returns date of the record that brings outstanding to zero,
+    or latest date if unclear
+  - If none found: returns null
+  - Filter out REVERSED status ledger records
+
+function enrichInvoicesWithDatePaid(
+  invoices: NormalisedInvoice[],
+  invoicePayments: YaoLedger[]
+): NormalisedInvoice[]
+  - Applies deriveInvoiceDatePaid to each invoice
+  - Returns new array with datePaid populated where derivable
+  - Logs: how many invoices had datePaid resolved vs remaining null
+
+function aggregateInvoicesByMatter(
+  invoices: NormalisedInvoice[]
+): Map<string, {
+  invoicedNetBilling: number;
+  invoicedOutstanding: number;
+  invoicedPaid: number;
+  invoicedWrittenOff: number;
+  invoiceCount: number;
+  latestInvoiceDate: string | null;
+}>
+  - Groups by matterId
+  - Only include ISSUED, PAID, CREDITED statuses (exclude DRAFT, CANCELED, ERROR)
+
+function aggregateInvoicesByFeeEarner(invoices: NormalisedInvoice[]): Map<string, {
+  invoicedNetBilling: number;
+  invoicedOutstanding: number;
+  invoicedPaid: number;
+  invoiceCount: number;
+}>
+  - Groups by responsibleLawyerId
+
+Write tests: tests/server/datasource/enrich/invoice-enricher.test.ts
+  - deriveInvoiceDatePaid returns correct date when match found
+  - deriveInvoiceDatePaid returns null when no matching ledger
+  - REVERSED ledger records are excluded from datePaid derivation
+  - DRAFT invoices excluded from matter aggregation
+  - Multiple invoices per matter aggregated correctly
+
+Run tsc --noEmit ; commit "feat: invoice enrichment and datePaid derivation" ; push
+```
+
+**Verify before proceeding:**
+- datePaid derivation handles multiple payment records
+- REVERSED ledgers excluded
+- Tests pass, tsc --noEmit passes
+
+---
+
+### 2D-03: Fee Earner CSV Merge
+
+**PROMPT:**
+
+```
+Build the fee earner CSV merge that enriches API attorney records with
+cost and target data from the manually uploaded fee earner CSV.
+
+Create: src/server/datasource/enrich/fee-earner-merger.ts
+
+This merges data from two sources:
+  Source A: attorneys from Yao API (identity + rates)
+  Source B: fee earner records from legacy upload pipeline (payModel, salary, targets)
+
+function buildFeeEarnerMergeMap(
+  csvFeeEarners: any[]   // from MongoDB enriched_entities where entity_type='feeEarner'
+): Map<string, object>
+  - Builds a map keyed by integration_account_id (primary)
+  - Falls back to email as secondary key
+  - Returns Map<integrationAccountId | email, csvRecord>
+
+function mergeFeeEarnerData(
+  apiAttorney: NormalisedAttorney,
+  mergeMap: Map<string, object>
+): EnrichedFeeEarner
+  - Looks up by integrationAccountId first, then email
+  - If match found: adds payModel, annualSalary, monthlySalary, pension,
+    employerNI, variablePay, targetWeeklyHours, chargeableWeeklyTarget,
+    annualLeaveEntitlement, feeSharePercent, firmLeadPercent
+  - If no match found: these fields are null, logs a warning
+  - Never overwrites API-sourced fields (name, email, rate, status etc)
+
+function mergeAllFeeEarners(
+  attorneys: NormalisedAttorney[],
+  firmId: string
+): Promise<EnrichedFeeEarner[]>
+  - Loads latest fee earner enriched entities from MongoDB for this firm
+  - Builds merge map
+  - Merges each attorney
+  - Returns enriched array with match stats logged
+
+interface EnrichedFeeEarner extends NormalisedAttorney {
+  payModel: 'Salaried' | 'FeeShare' | null;
+  annualSalary: number | null;
+  monthlySalary: number | null;
+  monthlyPension: number | null;
+  monthlyEmployerNI: number | null;
+  monthlyVariablePay: number | null;
+  annualTarget: number | null;
+  targetWeeklyHours: number | null;
+  chargeableWeeklyTarget: number | null;
+  annualLeaveEntitlement: number | null;
+  feeSharePercent: number | null;
+  firmLeadPercent: number | null;
+  csvDataPresent: boolean;  // true if CSV data was found for this attorney
+}
+
+Write tests: tests/server/datasource/enrich/fee-earner-merger.test.ts
+  - Merge by integrationAccountId works
+  - Merge by email fallback works
+  - No CSV data → fields null, csvDataPresent = false
+  - API fields never overwritten by CSV data
+  - Multiple attorneys merged correctly
+
+Run tsc --noEmit ; commit "feat: fee earner CSV merge with API attorney data" ; push
+```
+
+**Verify before proceeding:**
+- Integration account ID lookup works as primary key
+- Email fallback works
+- API fields never overwritten
+- Tests pass, tsc --noEmit passes
+
+---
+
+### 2D-04: Client Profile Builder
+
+**PROMPT:**
+
+```
+Build client profile enrichment that aggregates matter, invoice, and contact
+data into unified client entities for the client dashboard.
+
+Create: src/server/datasource/enrich/client-profile-builder.ts
+
+interface ClientProfile {
+  clientId: string;          // Yao contact _id
+  displayName: string;
+  type: 'Person' | 'Company';
+  email: string | null;
+  phone: string | null;
+  address: object | null;
+  tags: string[];
+  isArchived: boolean;
+  // Aggregated
+  matterCount: number;
+  activeMatterCount: number;
+  totalInvoiced: number;
+  totalOutstanding: number;
+  totalPaid: number;
+  firstMatterDate: string | null;
+  lastMatterDate: string | null;
+  lastActivityDate: string | null;
+  departmentIds: string[];
+  departmentNames: string[];
+}
+
+function buildClientProfiles(
+  contacts: NormalisedContact[],
+  matters: NormalisedMatter[],
+  invoices: NormalisedInvoice[]
+): ClientProfile[]
+  - Start with contacts as the base
+  - For each contact: find all matters where clientIds includes this contact's _id
+  - Aggregate matter stats (count, active count, date range)
+  - Find all invoices where clientIds includes this contact's _id
+  - Aggregate invoice stats (total invoiced, outstanding, paid)
+  - Collect unique departments from associated matters
+  - Return array of ClientProfile objects
+
+Write tests: tests/server/datasource/enrich/client-profile-builder.test.ts
+  - Client with multiple matters gets correct matter count
+  - Invoice totals aggregated correctly
+  - Client with no matters still appears (matterCount=0)
+  - Department deduplication works
+
+Run tsc --noEmit ; commit "feat: client profile builder" ; push
+```
+
+**Verify before proceeding:**
+- Client profiles include all contacts even with no matters
+- Aggregations are correct
+- Tests pass, tsc --noEmit passes
+
+---
+
+## Phase 2E: kpi_snapshots Store
+
+---
+
+### 2E-01: KpiSnapshotWriter Service
+
+**PROMPT:**
+
+```
+Build the service that writes pre-computed KPIs to the kpi_snapshots Supabase table.
+
+Create: src/server/services/kpi-snapshot-service.ts
+
+interface KpiSnapshotRow {
+  firm_id: string;
+  pulled_at: string;   // ISO timestamp
+  entity_type: string;
+  entity_id: string;
+  entity_name: string;
+  kpi_key: string;
+  kpi_value: number | null;
+  rag_status: 'green' | 'amber' | 'red' | 'neutral' | null;
+  period: string;
+  display_value: string | null;
+}
+
+async function writeKpiSnapshots(
+  firmId: string,
+  snapshots: KpiSnapshotRow[]
+): Promise<void>
+  - Uses service role Supabase client
+  - DELETES all existing kpi_snapshots for this firmId first (atomic replace)
+  - Then INSERT all new snapshots in batches of 500
+    (Supabase has row limits per insert call)
+  - If insert fails partway: rolls back by re-deleting and throwing
+  - Logs total rows written
+
+async function getKpiSnapshots(
+  firmId: string,
+  options: {
+    entityType?: string;
+    period?: string;
+    kpiKeys?: string[];
+    entityIds?: string[];
+  }
+): Promise<KpiSnapshotRow[]>
+  - SELECT from kpi_snapshots for this firmId
+  - Applies optional filters
+  - Returns ordered by entity_type, entity_name, kpi_key
+
+async function getLatestPullTime(firmId: string): Promise<string | null>
+  - Returns MAX(pulled_at) for this firmId from kpi_snapshots
+  - Returns null if no snapshots exist
+
+function formatDisplayValue(value: number | null, kpiKey: string): string | null
+  - Formats based on formula result type:
+    - percentage formulas (utilisation, realisation etc): '73.4%'
+    - currency formulas: '£42,500' (UK format, GBP)
+    - hours formulas: '126.5 hrs'
+    - days formulas: '23 days'
+    - ratio/number: '1.8x' or '4.2'
+  - Returns null if value is null
+
+Write tests: tests/server/services/kpi-snapshot-service.test.ts
+  - writeKpiSnapshots deletes old rows before inserting
+  - Batching works for >500 rows
+  - getKpiSnapshots filters correctly
+  - formatDisplayValue formats each type correctly
+  - Null values format as null (not "null%" etc)
+
+Run tsc --noEmit ; commit "feat: KpiSnapshotWriter service" ; push
+```
+
+**Verify before proceeding:**
+- Atomic replace (delete then insert) works correctly
+- Batching handles large datasets
+- formatDisplayValue handles all formula result types
+- Tests pass, tsc --noEmit passes
+
+---
+
+### 2E-02: Wire Formula Engine Output to kpi_snapshots
+
+**PROMPT:**
+
+```
+Update the formula engine output pipeline to write results to kpi_snapshots
+in addition to MongoDB. This is the key wiring step that makes dashboards fast.
+
+Create: src/server/datasource/enrich/kpi-snapshot-builder.ts
+
+function buildSnapshotsFromKpiResults(
+  firmId: string,
+  pulledAt: string,
+  kpiResults: CalculatedKpisDocument,
+  period: string = 'current'
+): KpiSnapshotRow[]
+  - Takes the existing CalculatedKpisDocument from the formula engine
+  - Flattens into KpiSnapshotRow[] format for kpi_snapshots table
+  - One row per entity per KPI key
+  - entity_type derived from the KPI result structure
+  - entity_id from the entity's Yao _id
+  - entity_name from the entity's display name
+  - kpi_value from the computed result
+  - rag_status from the RAG engine output
+  - display_value from formatDisplayValue()
+  - period = 'current' (future: also build 'ytd', quarterly)
+
+function buildFirmLevelSnapshots(
+  firmId: string,
+  pulledAt: string,
+  firmKpis: object
+): KpiSnapshotRow[]
+  - Builds the firm-level summary rows
+  - entity_id = firmId, entity_type = 'firm', entity_name = firm name
+
+Update: src/server/pipeline/pipeline-orchestrator.ts
+  (or equivalent for the new API pull flow)
+
+  After formula engine runs:
+    1. Build KpiSnapshotRow[] using buildSnapshotsFromKpiResults()
+    2. Call writeKpiSnapshots(firmId, rows)
+    3. Log: "Wrote N kpi_snapshot rows to Supabase"
+    4. Update pull_status.current_stage to 'Storing snapshots'
+
+Write tests: tests/server/datasource/enrich/kpi-snapshot-builder.test.ts
+  - All fee earner entities produce rows with correct entity_type
+  - All matter entities produce rows with correct entity_type
+  - Firm-level rows use firmId as entity_id
+  - Null kpi_value produces null display_value
+
+Run tsc --noEmit ; commit "feat: wire formula engine output to kpi_snapshots" ; push
+```
+
+**Verify before proceeding:**
+- kpi_snapshots is populated after a full pull
+- All entity types represented
+- Null values handled correctly
+- Tests pass, tsc --noEmit passes
+
+---
+
+### 2E-03: Dashboard KPI API Endpoint
+
+**PROMPT:**
+
+```
+Build the Netlify Function that serves dashboard data from kpi_snapshots.
+This replaces any existing dashboard endpoints that hit MongoDB or run calculations.
+
+Create: src/server/functions/dashboard-kpis.ts
+
+GET /api/dashboard-kpis
+
+Query parameters:
+  - entityType (required): feeEarner | matter | invoice | disbursement | department | client | firm
+  - period (optional, default: 'current')
+  - entityId (optional): filter to specific entity
+  - kpiKeys (optional, comma-separated): filter to specific KPIs
+
+Auth: authenticateRequest — any authenticated user of the firm
+
+Response shape:
+  {
+    firmId: string,
+    pulledAt: string | null,
+    entityType: string,
+    period: string,
+    snapshots: KpiSnapshotRow[],
+    meta: {
+      totalRows: number,
+      lastPulledAt: string | null,
+      pullStatus: 'idle' | 'running' | 'complete' | 'failed'
+    }
+  }
+
+GET /api/dashboard-kpis/pull-status
+
+Returns the current pull_status row for this firm:
+  {
+    status: string,
+    startedAt: string | null,
+    completedAt: string | null,
+    pulledAt: string | null,
+    currentStage: string | null,
+    recordsFetched: object,
+    error: string | null
+  }
+
+Write tests: tests/server/functions/dashboard-kpis.test.ts
+  - Returns 401 without auth token
+  - Returns only this firm's snapshots (not another firm's)
+  - entityType filter works
+  - kpiKeys filter works
+  - pull-status returns correct shape
+
+Run tsc --noEmit ; commit "feat: dashboard KPI API endpoint from kpi_snapshots" ; push
+```
+
+**Verify before proceeding:**
+- Endpoint returns data from kpi_snapshots only (not MongoDB)
+- firm_id isolation enforced
+- Tests pass, tsc --noEmit passes
+
+---
+
+## Phase 2F: Risk Scanner
+
+---
+
+### 2F-01: RiskScanner + risk_flags Writer
+
+**PROMPT:**
+
+```
+Build the risk scanner that runs after formula calculation and generates
+risk_flags documents for high-risk entities.
+
+Create: src/server/datasource/enrich/risk-scanner.ts
+
+The scanner checks computed KPI values against thresholds from firm config
+and generates flags for any that breach thresholds.
+
+interface RiskScanInput {
+  firmId: string;
+  kpiSnapshots: KpiSnapshotRow[];
+  config: FirmConfig;
+  pulledAt: string;
+}
+
+Implement these risk rules:
+
+WIP_AGE_HIGH
+  - Entity type: matter (and firm aggregate)
+  - Trigger: wipAge KPI > config.ragThresholds.wipAge.default.red.min
+  - Severity: high if > red threshold, medium if > amber threshold
+  - Detail: "WIP unbilled for N days — recovery risk increasing"
+
+BUDGET_BURN_CRITICAL
+  - Entity type: matter
+  - Trigger: budgetBurnRate > 85% (high) or > 70% (medium)
+  - Detail: "Matter at N% of budget — N% remaining"
+
+DEBTOR_DAYS_HIGH
+  - Entity type: invoice, client
+  - Trigger: daysOutstanding > config.ragThresholds.debtorDays.default.red.min
+  - Detail: "Invoice N days outstanding — above firm threshold"
+
+UTILISATION_DROP
+  - Entity type: feeEarner
+  - Trigger: current period utilisationRate < 70% of previous period (if historical data available)
+  - Severity: high if drop > 30%, medium if drop > 20%
+  - Detail: "Utilisation dropped from N% to N% — review workload"
+  - Skip if no historical data available
+
+DORMANT_MATTER
+  - Entity type: matter
+  - Trigger: matter isActive AND no time entries in last 14 days
+  - Detect via: lastEntryDate from WIP aggregation
+  - Detail: "No time recorded on this matter for N days"
+
+BAD_DEBT_RISK
+  - Entity type: invoice
+  - Trigger: outstanding > 0 AND daysOutstanding > 90
+  - Severity: high if > 120 days, medium if > 90 days
+  - Detail: "Invoice outstanding N days — potential bad debt"
+
+WRITE_OFF_SPIKE
+  - Entity type: feeEarner, firm
+  - Trigger: writeOffRate KPI > config.ragThresholds.writeOffRate.default.red.min
+  - Detail: "Write-off rate N% — exceeds firm threshold"
+
+function scanForRiskFlags(input: RiskScanInput): RiskFlagDocument[]
+  - Runs all 7 rule checks against relevant KPI snapshot rows
+  - Returns array of RiskFlagDocument objects
+  - ai_summary is null (populated in future AI phase)
+  - Sets severity correctly per rule
+
+Update pipeline to call:
+  const flags = scanForRiskFlags({ firmId, kpiSnapshots, config, pulledAt });
+  await storeRiskFlags(firmId, flags);
+
+Write tests: tests/server/datasource/enrich/risk-scanner.test.ts
+  - Each rule triggers correctly at its threshold
+  - Each rule does NOT trigger below threshold
+  - UTILISATION_DROP skips when no historical data
+  - Severity levels set correctly (high vs medium)
+  - Empty KPI snapshots returns empty flags array
+
+Run tsc --noEmit ; commit "feat: risk scanner with 7 risk rules" ; push
+```
+
+**Verify before proceeding:**
+- All 7 rules implemented and tested
+- Severity thresholds correct
+- Tests pass, tsc --noEmit passes
+
+---
+
+### 2F-02: Risk Flags API Endpoint
+
+**PROMPT:**
+
+```
+Create: src/server/functions/risk-flags.ts
+
+GET /api/risk-flags
+
+Query params:
+  - severity (optional): high | medium | low
+  - entityType (optional)
+  - flagType (optional)
+  - limit (optional, default 50)
+
+Auth: authenticateRequest — partner role and above
+
+Response:
+  {
+    firmId: string,
+    flaggedAt: string | null,
+    totalCount: number,
+    highCount: number,
+    mediumCount: number,
+    lowCount: number,
+    flags: RiskFlagDocument[]
+  }
+
+Run tsc --noEmit ; commit "feat: risk flags API endpoint" ; push
+```
+
+**Verify before proceeding:**
+- Endpoint requires appropriate role
+- firm_id isolation enforced
+- Tests pass, tsc --noEmit passes
+
+---
+
+## Phase 2G: Pull Orchestrator + Background Function
+
+---
+
+### 2G-01: Pull Status Tracking
+
+**PROMPT:**
+
+```
+Build the pull status tracking service used by the Background Function to
+report progress, and by the UI to poll for pull completion.
+
+Create: src/server/services/pull-status-service.ts
+
+async function startPull(firmId: string): Promise<void>
+  - Upserts pull_status row: status='running', started_at=now(), completed_at=null, error=null
+  - Throws if status is already 'running' (prevent concurrent pulls)
+
+async function updatePullStage(
+  firmId: string,
+  stage: string,
+  recordsFetched?: Record<string, number>
+): Promise<void>
+  - Updates current_stage and records_fetched
+  - Non-blocking (fire-and-forget is acceptable here)
+
+async function completePull(firmId: string): Promise<void>
+  - Updates status='complete', completed_at=now(), pulled_at=now()
+
+async function failPull(firmId: string, error: string): Promise<void>
+  - Updates status='failed', error=error message, completed_at=now()
+
+async function getPullStatus(firmId: string): Promise<PullStatus | null>
+  - Returns current pull_status row for firm
+  - Returns null if no row exists (never pulled)
+
+async function requireNoConcurrentPull(firmId: string): Promise<void>
+  - Checks if status='running'
+  - If running and started_at is more than 30 minutes ago: auto-fail it (stuck pull)
+  - If running and recent: throws PullAlreadyRunningError
+
+Write tests: tests/server/services/pull-status-service.test.ts
+  - startPull throws when already running
+  - Auto-fail logic works for stuck pulls (>30 min)
+  - completePull sets pulled_at
+
+Run tsc --noEmit ; commit "feat: pull status tracking service" ; push
+```
+
+**Verify before proceeding:**
+- Concurrent pull prevention works
+- Stuck pull auto-recovery works
+- Tests pass, tsc --noEmit passes
+
+---
+
+### 2G-02: PullOrchestrator — Full Sequence
+
+**PROMPT:**
+
+```
+Build the PullOrchestrator that coordinates the complete pull sequence.
+This is the main entry point called by the Background Function.
+
+Create: src/server/datasource/PullOrchestrator.ts
+
+class PullOrchestrator {
+  constructor(private firmId: string) {}
+
+  async run(): Promise<PullResult>
+}
+
+interface PullResult {
+  success: boolean;
+  pulledAt: string;
+  stats: {
+    attorneys: number;
+    matters: number;
+    timeEntries: number;
+    invoices: number;
+    disbursements: number;
+    tasks: number;
+    contacts: number;
+    kpiSnapshotsWritten: number;
+    riskFlagsGenerated: number;
+  };
+  errors: string[];
+  warnings: string[];
+}
+
+PullOrchestrator.run() sequence:
+
+1. await requireNoConcurrentPull(firmId)
+2. await startPull(firmId)
+
+3. await updatePullStage(firmId, 'Authenticating')
+   adapter = new DataSourceAdapter(firmId)
+   await adapter.authenticate()
+
+4. await updatePullStage(firmId, 'Fetching lookup tables')
+   { attorneys, departments, caseTypes, maps } = await adapter.fetchLookupTables()
+
+5. await updatePullStage(firmId, 'Fetching matters')
+   matters = await adapter.fetchMatters()
+   await updatePullStage(firmId, 'Fetching matters', { matters: matters.length })
+
+6. Fetch remaining datasets in parallel:
+   await updatePullStage(firmId, 'Fetching time entries, invoices, ledgers, tasks, contacts')
+   [timeEntries, invoices, rawLedgers, tasks, contacts, invoiceSummary] = await Promise.all([
+     adapter.fetchTimeEntries(),
+     adapter.fetchInvoices(),
+     adapter.fetchLedgers(),
+     adapter.fetchTasks(),
+     adapter.fetchContacts(),
+     adapter.fetchInvoiceSummary()
+   ])
+   ledgers = adapter.routeLedgers(rawLedgers)
+
+7. await updatePullStage(firmId, 'Normalising')
+   normalisedData = normaliseAll(rawData, maps)
+   stripSensitiveFromAll(normalisedData)  // belt-and-suspenders
+
+8. await updatePullStage(firmId, 'Enriching')
+   wipEnrichment = buildWipEnrichment(normalisedData.timeEntries)
+   enrichedInvoices = enrichInvoicesWithDatePaid(normalisedData.invoices, ledgers.invoicePayments)
+   enrichedFeeEarners = await mergeAllFeeEarners(normalisedData.attorneys, firmId)
+   clientProfiles = buildClientProfiles(normalisedData.contacts, normalisedData.matters, enrichedInvoices)
+
+9. await updatePullStage(firmId, 'Storing enriched data')
+   Store enriched entities in MongoDB (enriched_entities collection)
+
+10. await updatePullStage(firmId, 'Calculating KPIs')
+    config = await getFirmConfig(firmId)
+    kpiResults = await formulaEngine.executeBatch(enrichedData, config)
+    ragResults = ragEngine.applyThresholds(kpiResults, config)
+
+11. await updatePullStage(firmId, 'Storing KPIs')
+    Store calculated KPIs in MongoDB (calculated_kpis collection)
+
+12. await updatePullStage(firmId, 'Writing snapshots')
+    snapshots = buildSnapshotsFromKpiResults(firmId, pulledAt, kpiResults)
+    await writeKpiSnapshots(firmId, snapshots)
+
+13. await updatePullStage(firmId, 'Scanning for risks')
+    flags = scanForRiskFlags({ firmId, kpiSnapshots: snapshots, config, pulledAt })
+    await storeRiskFlags(firmId, flags)
+
+14. await completePull(firmId)
+    return { success: true, stats, errors: [], warnings: [] }
+
+Error handling:
+  - Each stage wrapped in try/catch
+  - Non-fatal warnings collected in warnings[]
+  - Fatal errors: call failPull(firmId, error.message), return { success: false, ... }
+  - YaoAuthError: specific message "Invalid Yao API credentials — please update in Settings"
+  - YaoApiError: specific message with status code
+
+Write tests: tests/server/datasource/PullOrchestrator.test.ts
+  - Full happy path produces PullResult with success=true
+  - YaoAuthError produces informative error message
+  - Concurrent pull is rejected
+  - Each stage updates pull_status
+
+Run tsc --noEmit ; commit "feat: PullOrchestrator — full pull sequence" ; push
+```
+
+**Verify before proceeding:**
+- Full sequence runs in correct order
+- Error handling produces informative messages
+- pull_status updated at each stage
+- Tests pass, tsc --noEmit passes
+
+---
+
+### 2G-03: Netlify Background Function
+
+**PROMPT:**
+
+```
+Create the Netlify Background Function that runs the pull.
+Background Functions have no timeout limit (unlike regular Functions at 26 seconds).
+
+Create: src/server/functions/yao-pull-background.ts
+
+This must be a Netlify Background Function — the filename must end in -background.ts
+or be configured in netlify.toml as a background function.
+
+import { Handler } from '@netlify/functions';
+import { PullOrchestrator } from '../datasource/PullOrchestrator';
+import { authenticateRequest } from '../lib/auth-middleware';
+
+export const handler: Handler = async (event) => {
+  // 1. Authenticate the request
+  const { firmId } = await authenticateRequest(event);
+
+  // 2. Run the pull (long-running — no timeout)
+  const orchestrator = new PullOrchestrator(firmId);
+  const result = await orchestrator.run();
+
+  // 3. Return result (Background Functions return 202 immediately
+  //    but the actual function continues running)
+  return {
+    statusCode: result.success ? 200 : 500,
+    body: JSON.stringify(result)
+  };
+};
+
+Update netlify.toml:
+  [functions.yao-pull-background]
+    timeout = 900   # 15 minutes max — should be plenty for any firm's data volume
+
+Create: src/server/functions/yao-pull.ts  (regular function — trigger only)
+  POST /api/yao-pull
+  - Authenticates request
+  - Checks pull_status — if already running, returns 409 with message
+  - Triggers the background function
+  - Returns 202 Accepted with { message: "Pull started", status: "running" }
+  
+  The UI should then poll GET /api/dashboard-kpis/pull-status until status='complete'
+
+Run tsc --noEmit ; commit "feat: Netlify Background Function for Yao pull" ; push
+```
+
+**Verify before proceeding:**
+- Background Function configured in netlify.toml
+- Trigger endpoint returns 202 immediately
+- Double-trigger prevention via pull_status check
+- tsc --noEmit passes
+
+---
+
+### 2G-04: Pull Trigger Endpoint
+
+**PROMPT:**
+
+```
+Create the credential setup Netlify Function so firms can connect their Yao account.
+This is the final piece needed before the full pull flow works end-to-end.
+
+Create: src/server/functions/yao-connect.ts
+
+POST /api/yao-connect
+  Body: { email: string; password: string; code?: number }
+  Auth: owner or admin role
+  
+  1. Validate body with Zod (email valid, password non-empty)
+  2. Attempt login to verify credentials work: POST /attorneys/login
+  3. If login succeeds: store credentials via storeCredentials()
+  4. Update pull_status.status to 'idle' if no row exists
+  5. Return { connected: true, attorneyName: string } (name from login response)
+  
+  If login fails:
+  Return 400 { connected: false, error: "Invalid credentials" }
+
+GET /api/yao-connect/status
+  Auth: any authenticated firm user
+  Returns:
+    { connected: boolean, lastVerifiedAt: string | null, lastPulledAt: string | null }
+
+Run tsc --noEmit ; commit "feat: Yao connection and credential verification endpoint" ; push
+```
+
+**Verify before proceeding:**
+- Credentials tested before storing
+- Attorney name returned on success (confirms which account connected)
+- Connection status endpoint works
+- Tests pass, tsc --noEmit passes
+
+---
+
+## Phase 2H: Testing + Hardening
+
+---
+
+### 2H-01: Integration Tests — DataSourceAdapter
+
+**PROMPT:**
+
+```
+Write integration tests that verify the full DataSourceAdapter pipeline
+using mocked HTTP responses that match the real Yao API schemas.
+
+Create: tests/server/datasource/integration/full-pipeline.test.ts
+
+Use vitest with mocked fetch (vi.stubGlobal('fetch', mockFetch)).
+
+Mock responses should match the real API schemas documented in ARCHITECTURE.md §9.
+Specifically use the field shapes verified during API exploration:
+- Attorney with rates array, no password field
+- Matter with nested responsible_lawyer object including rates
+- Time entry with activity object (title, measure)
+- Invoice with clients array and solicitor object
+- Ledger with OFFICE_PAYMENT type, negative value
+- Ledger with CLIENT_TO_OFFICE type, invoice field populated
+- Task with assigned_to object (no password)
+
+Tests to write:
+1. Full fetchAll() returns all expected datasets
+2. Attorney password field is never present in any output
+3. Matters pagination stops at correct page
+4. Time entry cursor pagination passes correct next value
+5. Ledger routing: OFFICE_PAYMENT → disbursements
+6. Ledger routing: CLIENT_TO_OFFICE+invoice → invoicePayments
+7. Ledger routing: record with both → appears in both arrays
+8. datePaid correctly derived from invoicePayments
+9. WIP aggregation produces correct totals
+10. Full PullOrchestrator.run() with mocked API completes successfully
+
+Run tsc --noEmit ; npm test ; commit "test: DataSourceAdapter integration tests" ; push
+```
+
+**Verify before proceeding:**
+- All 10 integration tests pass
+- No sensitive fields in any output
+- tsc --noEmit passes
+
+---
+
+### 2H-02: End-to-End Pull Test with Real Lewis Denley Data
+
+**PROMPT:**
+
+```
+Run a real end-to-end pull against Lewis Denley's Yao account.
+
+Lewis Denley test firm details (from memory):
+  firm_id: 63937b4d-b4ab-4a86-b6ae-28135306c757
+  Yao law_firm ID: 63fcea1ba9b581559eb0adc7
+
+Steps:
+1. Ensure YAO_CREDENTIAL_ENCRYPTION_KEY is set in .env.local
+2. Ensure Lewis Denley Yao credentials are stored in yao_api_credentials table
+3. Run: npx tsx scripts/test-pull.ts --firm-id=63937b4d-b4ab-4a86-b6ae-28135306c757
+
+Create: scripts/test-pull.ts
+  - Instantiates PullOrchestrator directly (not via HTTP)
+  - Runs the full pull
+  - Prints stats to console
+  - Prints first 3 rows of kpi_snapshots
+  - Prints any risk flags generated
+  - Prints any warnings
+
+Expected results:
+  - attorneys: ~15-20 records
+  - matters: ~800-900 records  
+  - timeEntries: ~10,000-20,000 records
+  - invoices: ~1,000-2,000 records
+  - disbursements: ~2,000-5,000 records
+  - tasks: ~500-2,000 records
+  - kpiSnapshotsWritten: >1,000 rows
+  - riskFlagsGenerated: some number > 0
+
+Verify:
+  - No password fields in any MongoDB document (spot check 5 attorney records)
+  - kpi_snapshots table has rows for Lewis Denley firm_id
+  - pull_status shows 'complete'
+  - dashboard-kpis endpoint returns data for Lewis Denley
+  - datePaid populated on at least some PAID invoices
+
+Commit: "test: verified end-to-end pull with Lewis Denley data" ; push
+```
+
+**Verify before proceeding:**
+- Pull completes without error
+- Record counts are in expected ranges
+- kpi_snapshots populated
+- No password fields anywhere in MongoDB
+
+---
+
+### 2H-03: Performance Verification
+
+**PROMPT:**
+
+```
+Verify that the kpi_snapshots layer delivers the target performance improvement.
+
+Create: scripts/verify-performance.ts
+
+Measure and log:
+1. Time to query kpi_snapshots for all fee earner KPIs (target: <500ms)
+   SELECT * FROM kpi_snapshots 
+   WHERE firm_id=$1 AND entity_type='feeEarner' AND period='current'
+
+2. Time to query kpi_snapshots for all matter KPIs (target: <500ms)
+
+3. Time to query kpi_snapshots for firm-level summary (target: <200ms)
+
+4. Count of rows in kpi_snapshots for Lewis Denley
+   (expect: number of entities × number of KPIs per entity type)
+
+5. Confirm no dashboard function calls MongoDB directly
+   Search codebase: grep for 'getDb()' or 'getCollection' in src/server/functions/
+   Any match that is NOT in background/pipeline functions is a bug — report it.
+
+6. Confirm no dashboard function runs formula calculations
+   Search for 'formulaEngine.execute' in src/server/functions/
+   Any match that is NOT in pull-related functions is a bug — report it.
+
+Log a performance report to console with all timings.
+
+Commit: "perf: verified dashboard query performance from kpi_snapshots" ; push
+```
+
+**Verify before proceeding:**
+- All queries complete in under 500ms
+- No direct MongoDB access in dashboard functions
+- No formula calculations in dashboard functions
+- Performance report logged
+
+---
+
+## Phase 2 Complete
+
+At the end of Phase 2, the following is complete and tested:
+
+**Infrastructure:**
+- `yao_api_credentials` table — encrypted credential storage per firm
+- `kpi_snapshots` table — pre-computed, indexed, dashboard-ready
+- `pull_status` table — pull progress tracking
+- `risk_flags` MongoDB collection — risk data for AI layer
+
+**DataSourceAdapter:**
+- Authentication with JWT token refresh per pull
+- Fetchers for all 8 datasets with correct pagination
+- Lookup table map builders (attorney, department, case type)
+- Ledger routing logic (disbursements, invoice payments, recoveries)
+- Field transformation engine (12 transformation rules)
+- Sensitive field stripper (belt-and-suspenders)
+
+**Enrichment:**
+- WIP aggregation by matter and fee earner
+- datePaid derivation from ledger records
+- Fee earner CSV merge with API data
+- Client profile builder
+
+**kpi_snapshots Layer:**
+- KpiSnapshotWriter service
+- Formula engine output wired to kpi_snapshots
+- Dashboard KPI API endpoint (reads kpi_snapshots only)
+- Pull status polling endpoint
+
+**Risk Scanner:**
+- 7 risk rules implemented
+- risk_flags written after every pull
+- Risk flags API endpoint
+
+**Pull Orchestration:**
+- PullOrchestrator with full 14-stage sequence
+- Netlify Background Function (no timeout)
+- Pull trigger endpoint (returns 202, UI polls for completion)
+- Yao connect/disconnect endpoints
+
+**Dashboards:**
+- Read exclusively from kpi_snapshots
+- Target load time: < 500ms
+- Zero formula calculations on load
+- Zero MongoDB access on load
+
+---
+
+*Yao Mind — From data you already have, to intelligence you have never had.*
+*Built with Claude Code · Powered by Anthropic · For UK Law Firms*
