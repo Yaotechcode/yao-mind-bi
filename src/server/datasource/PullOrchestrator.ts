@@ -184,31 +184,28 @@ export class PullOrchestrator {
       await updatePullStage(firmId, 'Fetching matters', { matters: rawMatters.length });
 
       // -----------------------------------------------------------------------
-      // Step 6: Fetch remaining datasets in parallel
+      // Step 6a: Fetch non-ledger transactional data in parallel
       // -----------------------------------------------------------------------
       await updatePullStage(
         firmId,
-        'Fetching time entries, invoices, ledgers, tasks, contacts',
+        'Fetching time entries, invoices, tasks, contacts',
       );
-      const [rawTimeEntries, rawInvoices, rawLedgersList, rawTasks, rawContacts] =
+      const [rawTimeEntries, rawInvoices, rawTasks, rawContacts] =
         await Promise.all([
           adapter.fetchTimeEntries(dateFrom),
           adapter.fetchInvoices(dateFrom),
-          adapter.fetchLedgers(dateFrom),
           adapter.fetchTasks(),
           adapter.fetchContacts(),
         ]);
-      const ledgers = adapter.routeLedgers(rawLedgersList);
-      stats.timeEntries   = rawTimeEntries.length;
-      stats.invoices      = rawInvoices.length;
-      stats.disbursements = ledgers.disbursements.length;
-      stats.tasks         = rawTasks.length;
-      stats.contacts      = rawContacts.length;
+      stats.timeEntries = rawTimeEntries.length;
+      stats.invoices    = rawInvoices.length;
+      stats.tasks       = rawTasks.length;
+      stats.contacts    = rawContacts.length;
 
       // Collect any non-fatal warnings from the adapter (e.g. early pagination stop)
       warnings.push(...adapter.getWarnings());
 
-      await updatePullStage(firmId, 'Fetching time entries, invoices, ledgers, tasks, contacts', {
+      await updatePullStage(firmId, 'Fetching time entries, invoices, tasks, contacts', {
         matters:     stats.matters,
         timeEntries: stats.timeEntries,
         invoices:    stats.invoices,
@@ -217,18 +214,17 @@ export class PullOrchestrator {
       });
 
       // -----------------------------------------------------------------------
-      // Step 7: Normalise + resolve + strip
+      // Step 7: Normalise + resolve + strip (non-ledger entities)
       // -----------------------------------------------------------------------
       await updatePullStage(firmId, 'Normalising');
 
       // Transform raw → normalised
-      const normAttorneys     = stripSensitiveFromArray(attorneys.map(transformAttorney));
-      const normMatters       = stripSensitiveFromArray(rawMatters.map((m) => transformMatter(m, maps)));
-      const normTimeEntries   = rawTimeEntries.map(transformTimeEntry);
-      const normInvoices      = rawInvoices.map(transformInvoice);
-      const normDisbursements = ledgers.disbursements.map(transformDisbursement);
-      const normTasks         = rawTasks.map(transformTask);
-      const normContacts      = rawContacts.map(transformContact);
+      const normAttorneys   = stripSensitiveFromArray(attorneys.map(transformAttorney));
+      const normMatters     = stripSensitiveFromArray(rawMatters.map((m) => transformMatter(m, maps)));
+      const normTimeEntries = rawTimeEntries.map(transformTimeEntry);
+      const normInvoices    = rawInvoices.map(transformInvoice);
+      const normTasks       = rawTasks.map(transformTask);
+      const normContacts    = rawContacts.map(transformContact);
 
       // Resolve map lookups (names, rates, department names)
       const resolved = resolveAll(
@@ -236,7 +232,7 @@ export class PullOrchestrator {
           matters:       normMatters,
           timeEntries:   normTimeEntries,
           invoices:      normInvoices,
-          disbursements: normDisbursements,
+          disbursements: [],
           tasks:         normTasks,
         },
         maps,
@@ -248,12 +244,11 @@ export class PullOrchestrator {
       const safeInvoices    = stripSensitiveFromArray(resolved.invoices);
 
       // -----------------------------------------------------------------------
-      // Step 8: Enrich
+      // Step 8: Enrich (non-ledger entities)
       // -----------------------------------------------------------------------
       await updatePullStage(firmId, 'Enriching');
 
-      const wipEnrichment    = buildWipEnrichment(safeTimeEntries);
-      const enrichedInvoices = enrichInvoicesWithDatePaid(safeInvoices, ledgers.invoicePayments);
+      const wipEnrichment = buildWipEnrichment(safeTimeEntries);
 
       let enrichedFeeEarners = normAttorneys;
       try {
@@ -263,26 +258,54 @@ export class PullOrchestrator {
         warnings.push(`Fee earner CSV merge skipped: ${msg}`);
       }
 
-      const clientProfiles = buildClientProfiles(normContacts, safeMatters, enrichedInvoices);
-
       // -----------------------------------------------------------------------
-      // Step 9: Store enriched data
+      // Step 9a: Store non-invoice entities
+      // rawTimeEntries, rawTasks, rawContacts are eligible for GC after this point
       // -----------------------------------------------------------------------
       await updatePullStage(firmId, 'Storing enriched data');
 
       await Promise.all([
-        storeEnrichedEntities(firmId, 'feeEarner',    enrichedFeeEarners as unknown as Record<string, unknown>[],    [], undefined),
-        storeEnrichedEntities(firmId, 'matter',       safeMatters as unknown as Record<string, unknown>[],           [], undefined),
-        storeEnrichedEntities(firmId, 'timeEntry',    safeTimeEntries as unknown as Record<string, unknown>[],       [], undefined),
-        storeEnrichedEntities(firmId, 'invoice',      enrichedInvoices as unknown as Record<string, unknown>[],      [], undefined),
-        storeEnrichedEntities(firmId, 'disbursement', resolved.disbursements as unknown as Record<string, unknown>[], [], undefined),
-        storeEnrichedEntities(firmId, 'task',         resolved.tasks as unknown as Record<string, unknown>[],        [], undefined),
-        storeEnrichedEntities(firmId, 'client',       clientProfiles as unknown as Record<string, unknown>[],        [], undefined),
-        storeEnrichedEntities(firmId, 'wip',          [wipEnrichment as unknown as Record<string, unknown>],         [], undefined),
+        storeEnrichedEntities(firmId, 'feeEarner',  enrichedFeeEarners as unknown as Record<string, unknown>[],  [], undefined),
+        storeEnrichedEntities(firmId, 'matter',     safeMatters as unknown as Record<string, unknown>[],         [], undefined),
+        storeEnrichedEntities(firmId, 'timeEntry',  safeTimeEntries as unknown as Record<string, unknown>[],     [], undefined),
+        storeEnrichedEntities(firmId, 'task',       resolved.tasks as unknown as Record<string, unknown>[],      [], undefined),
+        storeEnrichedEntities(firmId, 'wip',        [wipEnrichment as unknown as Record<string, unknown>],       [], undefined),
       ]);
 
       void departments; // fetched as part of lookup tables — stored via maps, not as enriched entity
       void caseTypes;
+
+      // -----------------------------------------------------------------------
+      // Step 6b: Fetch ledgers (sequential — after non-ledger data is processed)
+      // Building archivedMatterIds allows the type+archived filter to skip
+      // archived-matter ledgers before accumulating them in memory.
+      // -----------------------------------------------------------------------
+      const archivedMatterIds = new Set(
+        rawMatters
+          .filter((m) => m.status === 'ARCHIVED')
+          .map((m) => m._id),
+      );
+      await updatePullStage(firmId, 'Fetching ledgers');
+      const rawLedgersList = await adapter.fetchLedgers(dateFrom, archivedMatterIds);
+      const ledgers = adapter.routeLedgers(rawLedgersList);
+      stats.disbursements = ledgers.disbursements.length;
+
+      // -----------------------------------------------------------------------
+      // Step 9b: Enrich invoices with datePaid + store invoices and disbursements
+      // safeInvoices is still in scope — kept small (normalised shape)
+      // -----------------------------------------------------------------------
+      const enrichedInvoices = enrichInvoicesWithDatePaid(safeInvoices, ledgers.invoicePayments);
+      const normDisbursements = ledgers.disbursements.map(transformDisbursement);
+
+      const clientProfiles = buildClientProfiles(normContacts, safeMatters, enrichedInvoices);
+
+      await Promise.all([
+        storeEnrichedEntities(firmId, 'invoice',      enrichedInvoices as unknown as Record<string, unknown>[],       [], undefined),
+        storeEnrichedEntities(firmId, 'disbursement', normDisbursements as unknown as Record<string, unknown>[],       [], undefined),
+        storeEnrichedEntities(firmId, 'client',       clientProfiles as unknown as Record<string, unknown>[],          [], undefined),
+      ]);
+
+      await updatePullStage(firmId, 'Fetching ledgers', { disbursements: stats.disbursements });
 
       // -----------------------------------------------------------------------
       // Step 10: Calculate KPIs

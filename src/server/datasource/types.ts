@@ -112,7 +112,32 @@ export interface YaoInvoiceSummary {
 
 export interface YaoLedger {
   _id: string;
-  type: string;
+  type:
+    | 'OFFICE_PAYMENT'
+    | 'CLIENT_TO_OFFICE'
+    | 'OFFICE_RECEIPT'
+    | 'CLIENT_RECEIPT'
+    | 'CLIENT_PAYMENT'
+    | 'OFFICE_TO_CLIENT'
+    | 'CLIENT_TRANSFER'
+    | 'INVOICE'
+    | 'OFFICE_CREDIT'
+    | 'CREDIT_NOTE'
+    | 'REVERSAL'
+    | 'INTEREST'
+    | 'LINKED_PAYMENT'
+    | 'LINKED_RECEIPT'
+    | 'CLIENT_TO_LINKED'
+    | 'LINKED_TO_CLIENT'
+    | 'LINKED_TO_OFFICE'
+    | 'OFFICE_TO_LINKED'
+    | 'REGULATORY_DEPOSIT'
+    | 'REGULATORY_WITHDRAWAL'
+    | 'WRITE_OFF'
+    | 'WRITE_OFF_BILL'
+    | 'TAX'
+    | 'OPENING_BALANCE'
+    | string;
   value: number;
   vat: number;
   outstanding: number;

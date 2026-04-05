@@ -137,6 +137,62 @@ describe('fetchLedgers()', () => {
     ) as Record<string, unknown>;
     expect(secondBody['page']).toBe(2);
   });
+
+  it('discards records with irrelevant ledger types', async () => {
+    const adapter = await authenticatedAdapter();
+    const page = [
+      makeLedger({ type: 'OFFICE_PAYMENT' }),
+      makeLedger({ type: 'CLIENT_TO_OFFICE', invoice: 'inv-1' }),
+      makeLedger({ type: 'OFFICE_RECEIPT',   invoice: 'inv-2' }),
+      makeLedger({ type: 'CLIENT_RECEIPT' }),
+      makeLedger({ type: 'OPENING_BALANCE' }),
+      makeLedger({ type: 'TAX' }),
+    ];
+    mockFetch.mockResolvedValueOnce(makeResponse(page));
+
+    const result = await adapter.fetchLedgers();
+    expect(result).toHaveLength(3);
+  });
+
+  it('discards records whose matter is in archivedMatterIds', async () => {
+    const adapter = await authenticatedAdapter();
+    const page = [
+      makeLedger({ type: 'OFFICE_PAYMENT', matter: { _id: 'archived-matter', number: 1 } }),
+      makeLedger({ type: 'OFFICE_PAYMENT', matter: { _id: 'active-matter', number: 2 } }),
+      makeLedger({ type: 'OFFICE_PAYMENT' }), // no matter field — kept
+    ];
+    mockFetch.mockResolvedValueOnce(makeResponse(page));
+
+    const archivedMatterIds = new Set(['archived-matter']);
+    const result = await adapter.fetchLedgers('', archivedMatterIds);
+    expect(result).toHaveLength(2);
+  });
+
+  it('discards OFFICE_PAYMENT with outstanding=0 and date before fromDate', async () => {
+    const adapter = await authenticatedAdapter();
+    const fromDate = '2024-03-01';
+    const page = [
+      makeLedger({ type: 'OFFICE_PAYMENT', outstanding: 0, date: '2024-01-15' }),          // old + recovered → discard
+      makeLedger({ type: 'OFFICE_PAYMENT', outstanding: 0, date: '2024-03-15' }),          // recent → keep
+      makeLedger({ type: 'OFFICE_PAYMENT', outstanding: 500, date: '2024-01-15' }),        // still outstanding → keep
+      makeLedger({ type: 'CLIENT_TO_OFFICE', outstanding: 0, date: '2024-01-15', invoice: 'inv-1' }), // not OFFICE_PAYMENT → keep
+    ];
+    mockFetch.mockResolvedValueOnce(makeResponse(page));
+
+    const result = await adapter.fetchLedgers(fromDate);
+    expect(result).toHaveLength(3);
+  });
+
+  it('does not apply old-recovered filter when fromDate is empty', async () => {
+    const adapter = await authenticatedAdapter();
+    const page = [
+      makeLedger({ type: 'OFFICE_PAYMENT', outstanding: 0, date: '2020-01-01' }),
+    ];
+    mockFetch.mockResolvedValueOnce(makeResponse(page));
+
+    const result = await adapter.fetchLedgers(); // no fromDate → no cutoff applied
+    expect(result).toHaveLength(1);
+  });
 });
 
 // =============================================================================

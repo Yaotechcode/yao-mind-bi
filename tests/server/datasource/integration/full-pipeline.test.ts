@@ -462,7 +462,7 @@ afterEach(() => {
 // =============================================================================
 
 describe('Test 1: fetchAll() returns all expected datasets', () => {
-  it('returns attorneys, matters, timeEntries, invoices, ledgers, tasks, contacts', async () => {
+  it('returns attorneys, matters, timeEntries, invoices, tasks, contacts', async () => {
     const mockFetch = createMockFetch({});
     const adapter = await makeAuthenticatedAdapter(mockFetch);
 
@@ -493,14 +493,16 @@ describe('Test 1: fetchAll() returns all expected datasets', () => {
     const mockFetch = createMockFetch({});
     const adapter = await makeAuthenticatedAdapter(mockFetch);
 
-    const result = await adapter.fetchAll();
+    // fetchAll no longer includes ledgers — call separately
+    const rawLedgers = await adapter.fetchLedgers();
+    const ledgers = adapter.routeLedgers(rawLedgers);
 
     // OFFICE_PAYMENT → disbursements
-    expect(result.ledgers.disbursements).toHaveLength(1);
+    expect(ledgers.disbursements).toHaveLength(1);
     // CLIENT_TO_OFFICE with invoice → invoicePayments (led-002 and led-003)
-    expect(result.ledgers.invoicePayments).toHaveLength(2);
+    expect(ledgers.invoicePayments).toHaveLength(2);
     // CLIENT_TO_OFFICE with disbursements[] → disbursementRecoveries (led-003)
-    expect(result.ledgers.disbursementRecoveries).toHaveLength(1);
+    expect(ledgers.disbursementRecoveries).toHaveLength(1);
   });
 });
 

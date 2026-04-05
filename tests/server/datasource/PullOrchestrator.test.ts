@@ -249,6 +249,20 @@ describe('pull status stage tracking', () => {
     expect(stages).toContain('Fetching matters');
   });
 
+  it('updates stage to Fetching time entries, invoices, tasks, contacts', async () => {
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.run();
+    const stages = vi.mocked(pullStatus.updatePullStage).mock.calls.map((c) => c[1]);
+    expect(stages).toContain('Fetching time entries, invoices, tasks, contacts');
+  });
+
+  it('updates stage to Fetching ledgers', async () => {
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.run();
+    const stages = vi.mocked(pullStatus.updatePullStage).mock.calls.map((c) => c[1]);
+    expect(stages).toContain('Fetching ledgers');
+  });
+
   it('updates stage to Normalising', async () => {
     const { orchestrator } = makeOrchestrator();
     await orchestrator.run();

@@ -627,19 +627,100 @@ export class DataSourceAdapter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Fetches ledger records via page-based pagination. Response is a root-level array.
-   * @param fromDate  Optional ISO date string ('YYYY-MM-DD') to limit results to records on/after this date.
+   * Fetches ledger records via page-based pagination with client-side filtering applied
+   * per page to reduce peak memory usage.
+   *
+   * Filters applied in order after each page is pruned:
+   *   1. Type filter  — keep only OFFICE_PAYMENT, CLIENT_TO_OFFICE, OFFICE_RECEIPT
+   *   2. Archived matter filter — discard records whose matter is in archivedMatterIds
+   *   3. Old-recovered filter — for OFFICE_PAYMENT only: discard if outstanding=0 AND date < fromDate
+   *
+   * Logs reduction statistics after all pages complete.
+   *
+   * @param fromDate          ISO date string ('YYYY-MM-DD'). Passed as date_from to the API and
+   *                          used as the cutoff for the old-recovered filter. Defaults to '' (no cutoff).
+   * @param archivedMatterIds Set of matter._id values for archived matters to exclude.
    */
-  async fetchLedgers(fromDate?: string): Promise<YaoLedger[]> {
-    const body: Record<string, unknown> = {};
-    if (fromDate) body['date_from'] = fromDate;
-    const raw = await this.parallelPaginatePost<Record<string, unknown>>(
-      '/ledgers/search',
-      body,
-      '',       // root-level array response
-      50,
+  async fetchLedgers(
+    fromDate: string = '',
+    archivedMatterIds: Set<string> = new Set(),
+  ): Promise<YaoLedger[]> {
+    const KEPT_TYPES = new Set(['OFFICE_PAYMENT', 'CLIENT_TO_OFFICE', 'OFFICE_RECEIPT']);
+    const LIMIT = 50;
+    const BATCH_SIZE = 5;
+
+    const requestBody: Record<string, unknown> = {};
+    if (fromDate) requestBody['date_from'] = fromDate;
+
+    let total = 0;
+    let typeDiscarded = 0;
+    let archivedDiscarded = 0;
+    let oldRecoveredDiscarded = 0;
+    const all: YaoLedger[] = [];
+
+    /** Prune then apply all three client-side filters. Mutates the counters. */
+    const filterPage = (raw: Record<string, unknown>[]): YaoLedger[] => {
+      const pruned = pruneArray(raw, LEDGER_KEEP_FIELDS) as unknown as YaoLedger[];
+      total += raw.length;
+      const kept: YaoLedger[] = [];
+      for (const r of pruned) {
+        if (!KEPT_TYPES.has(r.type)) { typeDiscarded++; continue; }
+        if (r.matter?._id && archivedMatterIds.has(r.matter._id)) { archivedDiscarded++; continue; }
+        if (
+          r.type === 'OFFICE_PAYMENT' &&
+          r.outstanding === 0 &&
+          fromDate !== '' &&
+          r.date < fromDate
+        ) {
+          oldRecoveredDiscarded++;
+          continue;
+        }
+        kept.push(r);
+      }
+      return kept;
+    };
+
+    const extractRows = (response: unknown): Record<string, unknown>[] =>
+      (response as Record<string, unknown>[] | null) ?? [];
+
+    // Phase A: page 1
+    const response1 = await this.request<unknown>('POST', '/ledgers/search', {
+      body: { ...requestBody, size: LIMIT, page: 1 },
+    });
+    const rawFirstPage = extractRows(response1);
+    all.push(...filterPage(rawFirstPage));
+
+    if (rawFirstPage.length >= LIMIT) {
+      // Phase B: batches of BATCH_SIZE concurrent pages
+      let nextPage = 2;
+      while (true) {
+        const pageNumbers = Array.from({ length: BATCH_SIZE }, (_, i) => nextPage + i);
+        const results = await Promise.all(
+          pageNumbers.map(async (p): Promise<Record<string, unknown>[]> => {
+            const res = await this.request<unknown>('POST', '/ledgers/search', {
+              body: { ...requestBody, size: LIMIT, page: p },
+            });
+            return extractRows(res);
+          }),
+        );
+        let done = false;
+        for (const rawPage of results) {
+          all.push(...filterPage(rawPage));
+          if (rawPage.length < LIMIT) { done = true; break; }
+        }
+        if (done) break;
+        nextPage += BATCH_SIZE;
+      }
+    }
+
+    const kept = all.length;
+    console.log(
+      `[fetchLedgers] fetched ${total} total | kept ${kept} ` +
+      `(type filter: -${typeDiscarded}, archived: -${archivedDiscarded}, ` +
+      `old-recovered: -${oldRecoveredDiscarded})`,
     );
-    return pruneArray(raw, LEDGER_KEEP_FIELDS) as unknown as YaoLedger[];
+
+    return all;
   }
 
   /**
@@ -739,21 +820,21 @@ export class DataSourceAdapter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Executes a complete data pull for a firm in three sequential steps:
+   * Executes a complete data pull for a firm in three sequential steps.
+   * Ledgers are excluded — they must be fetched separately via fetchLedgers()
+   * after this call returns, to avoid holding all large arrays in memory simultaneously.
    *
    * Step 1 — Lookup tables (sequential prerequisite):
    *   attorneys, departments, case types fetched in parallel; maps built.
    *
-   * Step 2 — Transactional data (all in parallel — independent of each other):
-   *   matters, time entries, invoices, raw ledgers, tasks, contacts.
+   * Step 2 — Transactional data (parallel, excluding ledgers):
+   *   matters, time entries, invoices, tasks, contacts.
    *
-   * Step 3 — Summary + routing (fast, single calls):
-   *   invoice summary (single GET), ledger routing (pure function).
+   * Step 3 — Summary (single call):
+   *   invoice summary.
    *
    * @param firmConfig  Optional firm config. dataPullLookbackMonths controls how far
-   *                    back time entries, invoices, and ledgers are fetched (default: 6).
-   *
-   * Returns a single object containing all datasets and lookup maps.
+   *                    back time entries and invoices are fetched (default: 3).
    */
   async fetchAll(firmConfig?: Partial<FirmConfig>): Promise<{
     attorneys: YaoAttorney[];
@@ -762,7 +843,6 @@ export class DataSourceAdapter {
     matters: YaoMatter[];
     timeEntries: YaoTimeEntry[];
     invoices: YaoInvoice[];
-    ledgers: RoutedLedgers;
     tasks: YaoTask[];
     contacts: YaoContact[];
     invoiceSummary: YaoInvoiceSummary;
@@ -782,19 +862,17 @@ export class DataSourceAdapter {
     const { attorneys, departments, caseTypes, attorneyMap, departmentMap, caseTypeMap } =
       await this.fetchLookupTables();
 
-    // Step 2: all transactional datasets in parallel
-    const [matters, timeEntries, invoices, rawLedgers, tasks, contacts] = await Promise.all([
+    // Step 2: transactional datasets in parallel (ledgers fetched separately by caller)
+    const [matters, timeEntries, invoices, tasks, contacts] = await Promise.all([
       this.fetchMatters(),
       this.fetchTimeEntries(dateFrom),
       this.fetchInvoices(dateFrom),
-      this.fetchLedgers(dateFrom),
       this.fetchTasks(),
       this.fetchContacts(),
     ]);
 
-    // Step 3: summary + routing
-    const [invoiceSummary] = await Promise.all([this.fetchInvoiceSummary()]);
-    const ledgers = this.routeLedgers(rawLedgers);
+    // Step 3: invoice summary
+    const invoiceSummary = await this.fetchInvoiceSummary();
 
     console.log(
       `[DataSourceAdapter] fetchAll complete — matters: ${matters.length}, ` +
@@ -809,7 +887,6 @@ export class DataSourceAdapter {
       matters,
       timeEntries,
       invoices,
-      ledgers,
       tasks,
       contacts,
       invoiceSummary,

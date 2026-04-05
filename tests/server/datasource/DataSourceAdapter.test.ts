@@ -109,8 +109,8 @@ describe('authenticate()', () => {
     await expect(adapter.authenticate()).rejects.toThrow(YaoAuthError);
   });
 
-  it('sends code from YAO_API_CODE env var in login body', async () => {
-    process.env['YAO_API_CODE'] = '99887';
+  it('sends code from credentials in login body', async () => {
+    mockGetCredentials.mockResolvedValueOnce({ email: 'test@firm.com', password: 'secret', code: 99887 });
     mockFetch.mockResolvedValueOnce(makeResponse({ access_token: 'tok' }));
     const adapter = new DataSourceAdapter('firm-1');
     await adapter.authenticate();
@@ -123,7 +123,7 @@ describe('authenticate()', () => {
   });
 
   it('code is a number (not a string) in login body', async () => {
-    process.env['YAO_API_CODE'] = '42';
+    mockGetCredentials.mockResolvedValueOnce({ email: 'test@firm.com', password: 'secret', code: 42 });
     mockFetch.mockResolvedValueOnce(makeResponse({ access_token: 'tok' }));
     const adapter = new DataSourceAdapter('firm-1');
     await adapter.authenticate();

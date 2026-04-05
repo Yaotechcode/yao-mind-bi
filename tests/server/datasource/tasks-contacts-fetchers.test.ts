@@ -263,12 +263,11 @@ describe('fetchAll()', () => {
         is_deleted: false,
       }]));
 
-    // Step 2: transactional (parallel: matters, timeEntries, invoices, ledgers, tasks, contacts)
+    // Step 2: transactional (parallel: matters, timeEntries, invoices, tasks, contacts — ledgers excluded)
     mockFetch
       .mockResolvedValueOnce(makeResponse({ rows: [] }))   // /matters
       .mockResolvedValueOnce(makeResponse({ result: [] })) // /time-entries/search
       .mockResolvedValueOnce(makeResponse([]))              // /invoices/search
-      .mockResolvedValueOnce(makeResponse([]))              // /ledgers/search
       .mockResolvedValueOnce(makeResponse({ rows: [] }))   // /tasks
       .mockResolvedValueOnce(makeResponse({ rows: [] }));  // /contacts
 
@@ -288,22 +287,10 @@ describe('fetchAll()', () => {
     expect(result).toHaveProperty('matters');
     expect(result).toHaveProperty('timeEntries');
     expect(result).toHaveProperty('invoices');
-    expect(result).toHaveProperty('ledgers');
     expect(result).toHaveProperty('tasks');
     expect(result).toHaveProperty('contacts');
     expect(result).toHaveProperty('invoiceSummary');
     expect(result).toHaveProperty('maps');
-  });
-
-  it('ledgers key contains routed sub-buckets', async () => {
-    const adapter = await authenticatedAdapter();
-    setupFetchAllMocks();
-
-    const result = await adapter.fetchAll();
-
-    expect(result.ledgers).toHaveProperty('disbursements');
-    expect(result.ledgers).toHaveProperty('invoicePayments');
-    expect(result.ledgers).toHaveProperty('disbursementRecoveries');
   });
 
   it('maps key contains all three lookup maps', async () => {
@@ -355,7 +342,6 @@ describe('fetchAll()', () => {
       ['/matters', { rows: [] }],
       ['/time-entries', { result: [] }],
       ['/invoices/search', []],
-      ['/ledgers/search', []],
       ['/tasks', { rows: [] }],
       ['/contacts', { rows: [] }],
     ] as [string, unknown][]) {
@@ -371,12 +357,11 @@ describe('fetchAll()', () => {
 
     await adapter.fetchAll();
 
-    // All 6 step-2 endpoints were called
-    expect(callOrder).toHaveLength(6);
+    // All 5 step-2 endpoints were called (ledgers excluded from fetchAll)
+    expect(callOrder).toHaveLength(5);
     expect(callOrder).toContain('/matters');
     expect(callOrder).toContain('/time-entries');
     expect(callOrder).toContain('/invoices/search');
-    expect(callOrder).toContain('/ledgers/search');
     expect(callOrder).toContain('/tasks');
     expect(callOrder).toContain('/contacts');
   });
