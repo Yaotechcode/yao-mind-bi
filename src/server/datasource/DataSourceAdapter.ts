@@ -123,9 +123,7 @@ export class DataSourceAdapter {
    * Never logs credentials or token values.
    */
   async authenticate(): Promise<void> {
-    const { email, password } = await getCredentials(this.firmId);
-
-    const code = Number(process.env['YAO_API_CODE']);
+    const { email, password, code } = await getCredentials(this.firmId);
 
     const response = await fetch(`${this.baseUrl}/attorneys/login`, {
       method: 'POST',

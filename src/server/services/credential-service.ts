@@ -121,11 +121,13 @@ export async function storeCredentials(
   firmId: string,
   email: string,
   password: string,
+  code: number,
   userId?: string,
 ): Promise<void> {
   const key = getEncryptionKey();
   const encryptedEmail = serializeBlob(encrypt(email, key));
   const encryptedPassword = serializeBlob(encrypt(password, key));
+  const encryptedCode = serializeBlob(encrypt(String(code), key));
   const keyId = 'v1'; // increment when rotating the encryption key
 
   const db = getServerClient();
@@ -134,6 +136,7 @@ export async function storeCredentials(
       firm_id: firmId,
       encrypted_email: encryptedEmail,
       encrypted_password: encryptedPassword,
+      encrypted_code: encryptedCode,
       encryption_key_id: keyId,
       updated_at: new Date().toISOString(),
     },
@@ -160,11 +163,11 @@ export async function storeCredentials(
  */
 export async function getCredentials(
   firmId: string,
-): Promise<{ email: string; password: string }> {
+): Promise<{ email: string; password: string; code: number }> {
   const db = getServerClient();
   const { data, error } = await db
     .from('yao_api_credentials')
-    .select('encrypted_email, encrypted_password')
+    .select('encrypted_email, encrypted_password, encrypted_code')
     .eq('firm_id', firmId)
     .single();
 
@@ -180,8 +183,11 @@ export async function getCredentials(
 
   const email = decrypt(deserializeBlob(row['encrypted_email'] as string), key);
   const password = decrypt(deserializeBlob(row['encrypted_password'] as string), key);
+  const code = row['encrypted_code']
+    ? Number(decrypt(deserializeBlob(row['encrypted_code'] as string), key))
+    : 0;
 
-  return { email, password };
+  return { email, password, code };
 }
 
 /**

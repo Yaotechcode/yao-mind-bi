@@ -61,6 +61,7 @@ export const handler: Handler = async (event) => {
 
       const email = body['email'];
       const password = body['password'];
+      const code = body['code'];
 
       if (typeof email !== 'string' || !email) {
         return {
@@ -76,7 +77,14 @@ export const handler: Handler = async (event) => {
         };
       }
 
-      await storeCredentials(firmId, email, password, userId);
+      if (typeof code !== 'number' || !Number.isInteger(code)) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({ error: '"code" must be an integer' }),
+        };
+      }
+
+      await storeCredentials(firmId, email, password, code, userId);
       return {
         statusCode: 200,
         headers: { 'Content-Type': 'application/json' },

@@ -140,7 +140,7 @@ export const handler: Handler = async (event) => {
 
     // Credentials valid — store them
     try {
-      await storeCredentials(firmId, email, password, userId);
+      await storeCredentials(firmId, email, password, code, userId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error('[yao-connect] storeCredentials failed', { firmId, message });

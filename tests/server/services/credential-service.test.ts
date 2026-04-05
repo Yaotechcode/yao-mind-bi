@@ -80,7 +80,7 @@ describe('credential-service', () => {
         .mockReturnValueOnce(upsertBuilder)  // yao_api_credentials upsert
         .mockReturnValueOnce(auditBuilder);  // audit_log insert
 
-      await storeCredentials('firm-1', 'test@example.com', 'secret123');
+      await storeCredentials('firm-1', 'test@example.com', 'secret123', 42);
 
       // Capture what was upserted
       const upsertCall = (upsertBuilder['upsert'] as ReturnType<typeof vi.fn>).mock.calls[0] as [Record<string, unknown>];
@@ -91,6 +91,7 @@ describe('credential-service', () => {
         data: {
           encrypted_email: stored['encrypted_email'],
           encrypted_password: stored['encrypted_password'],
+          encrypted_code: stored['encrypted_code'],
         },
         error: null,
       });
@@ -100,22 +101,51 @@ describe('credential-service', () => {
 
       expect(result.email).toBe('test@example.com');
       expect(result.password).toBe('secret123');
+      expect(result.code).toBe(42);
     });
 
-    it('encrypts email and password as distinct ciphertexts', async () => {
+    it('encrypts email, password, and code as distinct ciphertexts', async () => {
       const upsertBuilder = createMockBuilder({ data: null, error: null });
       const auditBuilder = createMockBuilder({ data: null, error: null });
       mockFromFn
         .mockReturnValueOnce(upsertBuilder)
         .mockReturnValueOnce(auditBuilder);
 
-      await storeCredentials('firm-1', 'same@example.com', 'same@example.com');
+      await storeCredentials('firm-1', 'same@example.com', 'same@example.com', 99);
 
       const upsertCall = (upsertBuilder['upsert'] as ReturnType<typeof vi.fn>).mock.calls[0] as [Record<string, unknown>];
       const stored = upsertCall[0];
 
       // Same plaintext encrypted with fresh IVs → different ciphertexts
       expect(stored['encrypted_email']).not.toBe(stored['encrypted_password']);
+      expect(stored['encrypted_code']).toBeDefined();
+    });
+
+    it('getCredentials returns code: 0 when encrypted_code is null (legacy row)', async () => {
+      const upsertBuilder = createMockBuilder({ data: null, error: null });
+      const auditBuilder = createMockBuilder({ data: null, error: null });
+      mockFromFn
+        .mockReturnValueOnce(upsertBuilder)
+        .mockReturnValueOnce(auditBuilder);
+
+      await storeCredentials('firm-1', 'legacy@example.com', 'legacypass', 0);
+
+      const upsertCall = (upsertBuilder['upsert'] as ReturnType<typeof vi.fn>).mock.calls[0] as [Record<string, unknown>];
+      const stored = upsertCall[0];
+
+      // Simulate a legacy row with no encrypted_code
+      const selectBuilder = createMockBuilder({
+        data: {
+          encrypted_email: stored['encrypted_email'],
+          encrypted_password: stored['encrypted_password'],
+          encrypted_code: null,
+        },
+        error: null,
+      });
+      mockFromFn.mockReturnValueOnce(selectBuilder);
+
+      const result = await getCredentials('firm-1');
+      expect(result.code).toBe(0);
     });
   });
 
@@ -128,7 +158,7 @@ describe('credential-service', () => {
         .mockReturnValueOnce(upsertBuilder)
         .mockReturnValueOnce(auditBuilder);
 
-      await storeCredentials('firm-1', 'owner@firm1.com', 'pass1');
+      await storeCredentials('firm-1', 'owner@firm1.com', 'pass1', 7);
 
       // Query for firm-2 returns no row
       const emptyBuilder = createMockBuilder({ data: null, error: { message: 'No rows found' } });
@@ -145,7 +175,7 @@ describe('credential-service', () => {
       delete process.env['YAO_CREDENTIAL_ENCRYPTION_KEY'];
 
       await expect(
-        storeCredentials('firm-1', 'user@example.com', 'pass'),
+        storeCredentials('firm-1', 'user@example.com', 'pass', 1),
       ).rejects.toThrow('YAO_CREDENTIAL_ENCRYPTION_KEY is not set');
     });
 
@@ -168,7 +198,7 @@ describe('credential-service', () => {
       process.env['YAO_CREDENTIAL_ENCRYPTION_KEY'] = 'tooshort';
 
       await expect(
-        storeCredentials('firm-1', 'user@example.com', 'pass'),
+        storeCredentials('firm-1', 'user@example.com', 'pass', 1),
       ).rejects.toThrow('must be a 64-character hex string');
     });
   });
