@@ -331,6 +331,21 @@ export class CalculationOrchestrator {
     // result — NOT from kpisPayload which spreads the old MongoDB document and
     // can contain stale/chunked data (formulaResultsChunked: true, no formulaResults).
     const pulledAt = new Date().toISOString();
+    const sampleFormula = Object.entries(engineResult.results ?? {}).slice(0, 2);
+    console.log('[orchestrator] engineResult.results sample:', JSON.stringify(
+      sampleFormula.map(([formulaId, result]) => ({
+        formulaId,
+        resultType: typeof result,
+        isArray: Array.isArray(result),
+        keys: result && typeof result === 'object' && !Array.isArray(result)
+          ? Object.keys(result).slice(0, 5)
+          : null,
+        length: Array.isArray(result) ? result.length : null,
+        firstEntry: Array.isArray(result)
+          ? JSON.stringify(result[0])?.slice(0, 150)
+          : JSON.stringify(result)?.slice(0, 150)
+      }))
+    , null, 2));
     const snapshotRows = buildSnapshotsFromKpiResults(
       firmId,
       pulledAt,
