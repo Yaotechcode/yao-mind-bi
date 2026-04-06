@@ -234,7 +234,7 @@ export async function cleanupDuplicateEnrichedEntities(firmId: string): Promise<
   const { ObjectId } = await import('mongodb');
 
   const entityTypes = [
-    'feeEarner', 'matter', 'timeEntry', 'invoice',
+    'feeEarner', 'feeEarnerCsv', 'matter', 'timeEntry', 'invoice',
     'client', 'disbursement', 'department', 'task',
   ];
 

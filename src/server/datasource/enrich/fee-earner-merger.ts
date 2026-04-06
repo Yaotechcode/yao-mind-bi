@@ -270,7 +270,7 @@ export async function mergeAllFeeEarners(
   attorneys: NormalisedAttorney[],
   firmId: string,
 ): Promise<EnrichedFeeEarner[]> {
-  const snapshot = await getLatestEnrichedEntities(firmId, 'feeEarner');
+  const snapshot = await getLatestEnrichedEntities(firmId, 'feeEarnerCsv');
   const csvRecords = (snapshot?.records ?? []) as Record<string, unknown>[];
 
   console.log(

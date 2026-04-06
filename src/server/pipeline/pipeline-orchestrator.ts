@@ -436,7 +436,7 @@ export async function runPipelineFromStored(params: {
   const joinEntityStore: Array<{ records: unknown[]; etype: string }> = [
     { records: joinResult.timeEntries,    etype: 'timeEntry' },
     { records: joinResult.matters,        etype: 'matter' },
-    { records: joinResult.feeEarners,     etype: 'feeEarner' },
+    { records: joinResult.feeEarners,     etype: 'feeEarnerCsv' },
     { records: joinResult.invoices,       etype: 'invoice' },
     { records: joinResult.clients,        etype: 'client' },
     { records: joinResult.disbursements,  etype: 'disbursement' },
@@ -632,7 +632,7 @@ export async function runFullPipeline(
     const joinEntityStore: Array<{ records: unknown[]; etype: string }> = [
       { records: joinResult.timeEntries,   etype: 'timeEntry' },
       { records: joinResult.matters,       etype: 'matter' },
-      { records: joinResult.feeEarners,    etype: 'feeEarner' },
+      { records: joinResult.feeEarners,    etype: 'feeEarnerCsv' },
       { records: joinResult.invoices,      etype: 'invoice' },
       { records: joinResult.clients,       etype: 'client' },
       { records: joinResult.disbursements, etype: 'disbursement' },
