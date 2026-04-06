@@ -349,12 +349,20 @@ export class PullOrchestrator {
       // (step 9b inside calculateAll). Do NOT call writeKpiSnapshots again here:
       // a second call with an empty array would DELETE the rows just written.
       // Build snapshotRows only for the risk flag scan below.
+      //
+      // CalculationResult uses field 'results' (not 'formulaResults'), so pass
+      // the fields explicitly — do NOT cast the whole object as Record<string,unknown>.
       // -----------------------------------------------------------------------
       await updatePullStage(firmId, 'Writing snapshots');
       const snapshotRows = buildSnapshotsFromKpiResults(
         firmId,
         pulledAt,
-        { kpis: kpiResult as unknown as Record<string, unknown> },
+        {
+          kpis: {
+            formulaResults: kpiResult.results,
+            ragAssignments: kpiResult.ragAssignments,
+          },
+        },
       );
       stats.kpiSnapshotsWritten = snapshotRows.length;
 

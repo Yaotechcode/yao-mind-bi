@@ -326,11 +326,20 @@ export class CalculationOrchestrator {
     // This is the primary dashboard data store. It must complete regardless of
     // whether the MongoDB calculated_kpis write succeeds. Order is intentional:
     // kpi_snapshots first, then MongoDB (non-fatal).
+    //
+    // Pass formulaResults and ragAssignments directly from the in-memory engine
+    // result — NOT from kpisPayload which spreads the old MongoDB document and
+    // can contain stale/chunked data (formulaResultsChunked: true, no formulaResults).
     const pulledAt = new Date().toISOString();
     const snapshotRows = buildSnapshotsFromKpiResults(
       firmId,
       pulledAt,
-      { kpis: kpisPayload as { formulaResults?: Record<string, FormulaResult>; ragAssignments?: Record<string, Record<string, RagAssignment>> } },
+      {
+        kpis: {
+          formulaResults: engineResult.results,
+          ragAssignments: ragResult.assignments,
+        },
+      },
     );
     try {
       await this.deps.writeSnapshots(firmId, snapshotRows);
