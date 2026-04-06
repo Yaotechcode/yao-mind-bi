@@ -289,10 +289,34 @@ export async function getLatestCalculatedKpis(
   return results[0] ?? null;
 }
 
+// Safe BSON size threshold: 12MB leaves a 4MB buffer below MongoDB's 16MB limit.
+// Payloads above this are split: formulaResults chunks go to calculated_kpis_chunks,
+// the header document (without formulaResults) stays in calculated_kpis.
+const BSON_SAFE_THRESHOLD_BYTES = 12 * 1024 * 1024; // 12MB
+const FORMULA_CHUNK_SIZE = 500; // max entity results per chunk document
+
+/**
+ * Estimate serialised BSON size by measuring the JSON string length.
+ * JSON ≈ BSON for typical mixed payloads; this is a conservative proxy.
+ */
+function estimateSize(obj: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(obj) ?? '', 'utf8');
+  } catch {
+    return Infinity; // treat unserializable as too large
+  }
+}
+
 /**
  * Upsert the calculated-KPIs snapshot for a firm.
- * Uses replaceOne with upsert so only one document per firm_id ever exists —
- * prevents unbounded accumulation of KPI snapshots on every calculation run.
+ *
+ * If the payload is under 12MB, it is stored as a single document in
+ * calculated_kpis (existing behaviour). If it exceeds the safe threshold,
+ * the formulaResults are split into chunks stored in calculated_kpis_chunks
+ * and the header document (without formulaResults) is stored in calculated_kpis
+ * with a chunk_count field so readers know to reassemble.
+ *
+ * Uses replaceOne + upsert so only one header per firm_id ever exists.
  */
 export async function storeCalculatedKpis(
   firmId: string,
@@ -300,19 +324,106 @@ export async function storeCalculatedKpis(
   configVersion: string,
   dataVersion: string
 ): Promise<void> {
-  const col = await getCollection<CalculatedKpisDocument>('calculated_kpis');
-  const doc: CalculatedKpisDocument = {
+  const calculatedAt = new Date();
+  const estimatedBytes = estimateSize(kpis);
+
+  // ------------------------------------------------------------------
+  // Fast path: payload fits in a single document
+  // ------------------------------------------------------------------
+  if (estimatedBytes <= BSON_SAFE_THRESHOLD_BYTES) {
+    const col = await getCollection<CalculatedKpisDocument>('calculated_kpis');
+    const doc: CalculatedKpisDocument = {
+      firm_id: firmId,
+      calculated_at: calculatedAt,
+      config_version: configVersion,
+      data_version: dataVersion,
+      kpis,
+    };
+    await col.replaceOne(
+      { firm_id: firmId },
+      doc as Parameters<typeof col.replaceOne>[1],
+      { upsert: true },
+    );
+    return;
+  }
+
+  // ------------------------------------------------------------------
+  // Chunked path: split formulaResults across calculated_kpis_chunks
+  // ------------------------------------------------------------------
+  console.log(`[mongodb] calculated_kpis payload ~${Math.round(estimatedBytes / 1024 / 1024)}MB — using chunked storage`);
+
+  const formulaResults = kpis['formulaResults'] as Record<string, unknown> | undefined;
+  const kpisWithoutFormulas: Record<string, unknown> = { ...kpis };
+  delete kpisWithoutFormulas['formulaResults'];
+
+  // Flatten formulaResults into (formulaId, entityId, entityResult) triples
+  // and batch them into chunks of FORMULA_CHUNK_SIZE.
+  const chunks: Array<{ formulaId: string; entityId: string; entityResult: unknown }[]> = [[]];
+
+  if (formulaResults) {
+    for (const [formulaId, result] of Object.entries(formulaResults)) {
+      const entityResults = (result as Record<string, unknown>)['entityResults'] as Record<string, unknown> | undefined;
+      if (!entityResults) continue;
+      for (const [entityId, entityResult] of Object.entries(entityResults)) {
+        const last = chunks[chunks.length - 1];
+        if (last.length >= FORMULA_CHUNK_SIZE) {
+          chunks.push([]);
+        }
+        chunks[chunks.length - 1].push({ formulaId, entityId, entityResult });
+      }
+    }
+  }
+
+  // Remove trailing empty chunk
+  if (chunks.length > 0 && chunks[chunks.length - 1].length === 0) {
+    chunks.pop();
+  }
+
+  const chunkCount = chunks.length;
+  const chunksCol = await getCollection<Record<string, unknown>>('calculated_kpis_chunks');
+
+  // Write chunk documents (upsert by firm_id + chunk_index)
+  for (let i = 0; i < chunkCount; i++) {
+    await chunksCol.replaceOne(
+      { firm_id: firmId, chunk_index: i },
+      {
+        firm_id: firmId,
+        chunk_index: i,
+        chunk_count: chunkCount,
+        data_version: dataVersion,
+        calculated_at: calculatedAt,
+        entries: chunks[i],
+      },
+      { upsert: true },
+    );
+  }
+
+  // Delete stale chunks from a previous run that had more chunks
+  await chunksCol.deleteMany({
     firm_id: firmId,
-    calculated_at: new Date(),
+    chunk_index: { $gte: chunkCount },
+  });
+
+  // Write the header document without formulaResults
+  const col = await getCollection<CalculatedKpisDocument>('calculated_kpis');
+  const headerDoc: CalculatedKpisDocument = {
+    firm_id: firmId,
+    calculated_at: calculatedAt,
     config_version: configVersion,
     data_version: dataVersion,
-    kpis,
+    kpis: {
+      ...kpisWithoutFormulas,
+      formulaResultsChunked: true,
+      chunk_count: chunkCount,
+    },
   };
   await col.replaceOne(
     { firm_id: firmId },
-    doc as Parameters<typeof col.replaceOne>[1],
+    headerDoc as Parameters<typeof col.replaceOne>[1],
     { upsert: true },
   );
+
+  console.log(`[mongodb] calculated_kpis stored as header + ${chunkCount} chunks in calculated_kpis_chunks`);
 }
 
 /**

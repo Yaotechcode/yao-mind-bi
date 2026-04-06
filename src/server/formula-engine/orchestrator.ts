@@ -310,11 +310,12 @@ export class CalculationOrchestrator {
       },
     };
 
-    await this.deps.persistKpis(firmId, kpisPayload, configVersion, dataVersion);
-
     // -------------------------------------------------------------------------
-    // 9b. Write kpi_snapshots to Supabase (fire after MongoDB persist)
+    // 9b. Write kpi_snapshots to Supabase — CRITICAL PATH, runs before MongoDB
     // -------------------------------------------------------------------------
+    // This is the primary dashboard data store. It must complete regardless of
+    // whether the MongoDB calculated_kpis write succeeds. Order is intentional:
+    // kpi_snapshots first, then MongoDB (non-fatal).
     const pulledAt = new Date().toISOString();
     const snapshotRows = buildSnapshotsFromKpiResults(
       firmId,
@@ -325,7 +326,21 @@ export class CalculationOrchestrator {
       await this.deps.writeSnapshots(firmId, snapshotRows);
       console.info(`[orchestrator] Wrote ${snapshotRows.length} kpi_snapshot rows to Supabase`);
     } catch (snapshotErr) {
-      console.error('[orchestrator] Failed to write kpi_snapshots to Supabase — calculation result still persisted to MongoDB', snapshotErr);
+      console.error('[orchestrator] Failed to write kpi_snapshots to Supabase:', snapshotErr);
+    }
+
+    // -------------------------------------------------------------------------
+    // 9c. Persist full results to MongoDB — non-fatal (secondary store)
+    // -------------------------------------------------------------------------
+    // calculated_kpis is used by the AI layer and historical reference only.
+    // Large payloads (>12MB) are chunked across documents. If this write fails
+    // (e.g. BSON size limit), dashboards are unaffected — kpi_snapshots already written.
+    try {
+      await this.deps.persistKpis(firmId, kpisPayload, configVersion, dataVersion);
+      console.info('[orchestrator] Stored calculated KPIs to MongoDB');
+    } catch (persistErr) {
+      const msg = persistErr instanceof Error ? persistErr.message : String(persistErr);
+      console.warn('[orchestrator] calculated_kpis write skipped (non-fatal):', msg);
     }
 
     // -------------------------------------------------------------------------
