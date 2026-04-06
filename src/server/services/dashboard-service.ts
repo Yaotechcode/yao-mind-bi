@@ -138,6 +138,170 @@ const EMPTY_FIRM: AggregatedFirm = {
   orphanedWip: { orphanedWipEntryCount: 0, orphanedWipHours: 0, orphanedWipValue: 0, orphanedWipPercent: 0, orphanedWipNote: '' },
 };
 
+// ---------------------------------------------------------------------------
+// Derived aggregate builders — used when MongoDB aggregate is absent (API path)
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive per-matter aggregates from individual time entry and invoice records.
+ * Used when the legacy `calculatedKpis.aggregate.matters` is empty (API pull path).
+ */
+function deriveMatterAggregates(
+  enrichedMatters: Record<string, unknown>[],
+  timeEntries: EnrichedTimeEntry[],
+  invoices: EnrichedInvoice[],
+): AggregatedMatter[] {
+  // Build WIP totals per matter — time entries use matterId in the API path
+  const wipByMatter = new Map<string, {
+    billable: number; hours: number; writeOff: number;
+    chargeableHours: number; oldest: Date | null; newest: Date | null;
+  }>();
+  for (const te of timeEntries) {
+    const teRec = te as unknown as Record<string, unknown>;
+    // matterId is the primary join key in the API path; fall back to matterNumber
+    const key = String(teRec['matterId'] ?? teRec['matterNumber'] ?? '');
+    if (!key) continue;
+    const acc = wipByMatter.get(key) ?? { billable: 0, hours: 0, writeOff: 0, chargeableHours: 0, oldest: null, newest: null };
+    acc.billable += (te.recordedValue ?? 0) as number;
+    acc.hours += (te.durationHours ?? 0) as number;
+    acc.writeOff += (teRec['writeOff'] as number | undefined) ?? 0;
+    if ((teRec['isChargeable'] as boolean | undefined) !== false) {
+      acc.chargeableHours += (te.durationHours ?? 0) as number;
+    }
+    const dateStr = toDateString(teRec['date']);
+    if (dateStr) {
+      const d = new Date(dateStr);
+      if (!acc.oldest || d < acc.oldest) acc.oldest = d;
+      if (!acc.newest || d > acc.newest) acc.newest = d;
+    }
+    wipByMatter.set(key, acc);
+  }
+
+  // Build invoice totals per matter — invoices use matterNumber
+  const invByMatter = new Map<string, { netBilling: number; outstanding: number; paid: number; writtenOff: number; count: number }>();
+  for (const inv of invoices) {
+    const invRec = inv as unknown as Record<string, unknown>;
+    const key = String(invRec['matterNumber'] ?? '');
+    if (!key) continue;
+    const acc = invByMatter.get(key) ?? { netBilling: 0, outstanding: 0, paid: 0, writtenOff: 0, count: 0 };
+    acc.netBilling += (invRec['total'] as number | undefined) ?? 0;
+    acc.outstanding += (invRec['outstanding'] as number | undefined) ?? 0;
+    acc.paid += (invRec['paid'] as number | undefined) ?? 0;
+    acc.writtenOff += (invRec['writtenOff'] as number | undefined) ?? 0;
+    acc.count++;
+    invByMatter.set(key, acc);
+  }
+
+  const now = new Date();
+
+  return enrichedMatters.map((em) => {
+    const matterId = String(em['matterId'] ?? em['_id'] ?? '');
+    const matterNumber = String(em['matterNumber'] ?? '');
+    // Try matterId first (API path), then matterNumber (legacy path)
+    const wip = wipByMatter.get(matterId) ?? wipByMatter.get(matterNumber)
+      ?? { billable: 0, hours: 0, writeOff: 0, chargeableHours: 0, oldest: null, newest: null };
+    const inv = invByMatter.get(matterNumber) ?? { netBilling: 0, outstanding: 0, paid: 0, writtenOff: 0, count: 0 };
+
+    const wipAge = wip.oldest
+      ? Math.floor((now.getTime() - wip.oldest.getTime()) / (1000 * 60 * 60 * 24))
+      : null;
+
+    return {
+      matterId,
+      matterNumber,
+      wipTotalDurationMinutes: wip.hours * 60,
+      wipTotalHours: wip.hours,
+      wipTotalBillable: wip.billable,
+      wipTotalWriteOff: wip.writeOff,
+      wipTotalUnits: 0,
+      wipTotalChargeable: wip.billable,
+      wipTotalNonChargeable: 0,
+      wipChargeableHours: wip.chargeableHours,
+      wipNonChargeableHours: wip.hours - wip.chargeableHours,
+      wipOldestEntryDate: wip.oldest,
+      wipNewestEntryDate: wip.newest,
+      wipAgeInDays: wipAge,
+      invoiceCount: inv.count,
+      invoicedNetBilling: inv.netBilling,
+      invoicedDisbursements: 0,
+      invoicedTotal: inv.netBilling,
+      invoicedOutstanding: inv.outstanding,
+      invoicedPaid: inv.paid,
+      invoicedWrittenOff: inv.writtenOff,
+      discrepancy: undefined,
+    } as AggregatedMatter;
+  });
+}
+
+/** Derive firm-level totals by summing across derived matter aggregates. */
+function deriveFirmAggregate(matters: AggregatedMatter[]): AggregatedFirm {
+  return {
+    feeEarnerCount: 0,
+    activeFeeEarnerCount: 0,
+    salariedFeeEarnerCount: 0,
+    feeShareFeeEarnerCount: 0,
+    matterCount: matters.length,
+    activeMatterCount: matters.filter((m) => m.wipTotalBillable > 0 || m.invoicedOutstanding > 0).length,
+    inProgressMatterCount: 0,
+    completedMatterCount: 0,
+    otherMatterCount: 0,
+    totalWipHours:         matters.reduce((s, m) => s + m.wipTotalHours, 0),
+    totalChargeableHours:  matters.reduce((s, m) => s + m.wipChargeableHours, 0),
+    totalWipValue:         matters.reduce((s, m) => s + m.wipTotalBillable, 0),
+    totalWriteOffValue:    matters.reduce((s, m) => s + m.wipTotalWriteOff, 0),
+    totalInvoicedRevenue:  matters.reduce((s, m) => s + m.invoicedNetBilling, 0),
+    totalOutstanding:      matters.reduce((s, m) => s + m.invoicedOutstanding, 0),
+    totalPaid:             matters.reduce((s, m) => s + m.invoicedPaid, 0),
+    orphanedWip: { orphanedWipEntryCount: 0, orphanedWipHours: 0, orphanedWipValue: 0, orphanedWipPercent: 0, orphanedWipNote: '' },
+  };
+}
+
+/** Derive per-client aggregates by grouping derived matter aggregates by client name. */
+function deriveClientAggregates(
+  matters: AggregatedMatter[],
+  enrichedMatters: Record<string, unknown>[],
+): AggregatedClient[] {
+  // Build a matter-id → clientName lookup from enriched matters
+  const clientByMatter = new Map<string, string>();
+  for (const em of enrichedMatters) {
+    const clientName = String(em['clientName'] ?? em['displayName'] ?? 'Unknown');
+    const mid = String(em['matterId'] ?? em['_id'] ?? '');
+    const mnum = String(em['matterNumber'] ?? '');
+    if (mid) clientByMatter.set(mid, clientName);
+    if (mnum) clientByMatter.set(mnum, clientName);
+  }
+
+  const byClient = new Map<string, AggregatedClient>();
+  for (const m of matters) {
+    const clientName = clientByMatter.get(m.matterId ?? '') ?? clientByMatter.get(m.matterNumber ?? '') ?? 'Unknown';
+    const acc = byClient.get(clientName) ?? {
+      clientName,
+      displayName: clientName,
+      matterCount: 0,
+      activeMatterCount: 0,
+      closedMatterCount: 0,
+      totalWipValue: 0,
+      totalInvoiced: 0,
+      totalOutstanding: 0,
+      totalPaid: 0,
+      oldestMatterDate: null,
+    };
+    acc.matterCount++;
+    if (m.wipTotalBillable > 0 || m.invoicedOutstanding > 0) acc.activeMatterCount++;
+    acc.totalWipValue += m.wipTotalBillable;
+    acc.totalInvoiced += m.invoicedNetBilling;
+    acc.totalOutstanding += m.invoicedOutstanding;
+    acc.totalPaid += m.invoicedPaid;
+    if (m.wipOldestEntryDate) {
+      if (!acc.oldestMatterDate || m.wipOldestEntryDate < acc.oldestMatterDate) {
+        acc.oldestMatterDate = m.wipOldestEntryDate;
+      }
+    }
+    byClient.set(clientName, acc);
+  }
+  return [...byClient.values()];
+}
+
 /**
  * Loads raw aggregated entity data from MongoDB (legacy pipeline output).
  * Note: formula results and RAG statuses now come from kpi_snapshots (Supabase),
@@ -156,17 +320,34 @@ async function loadDashboardData(firmId: string): Promise<DashboardData> {
 
   const agg = (kpisDoc as unknown as Record<string, unknown> | null)?.['aggregate'] as Record<string, unknown> | undefined;
 
+  const timeEntries     = (timeEntryDoc?.records    ?? []) as unknown as EnrichedTimeEntry[];
+  const invoices        = (invoiceDoc?.records      ?? []) as unknown as EnrichedInvoice[];
+  const disbursements   = (disbursementDoc?.records ?? []) as unknown as EnrichedDisbursement[];
+  const enrichedMatters = (matterDoc?.records       ?? []) as Record<string, unknown>[];
+
+  // Use MongoDB aggregate when available (legacy pipeline path).
+  // For API-path firms the aggregate is absent — derive from individual records.
+  let matters: AggregatedMatter[]   = (agg?.['matters'] as AggregatedMatter[] | undefined) ?? [];
+  let firm:    AggregatedFirm       = (agg?.['firm']    as AggregatedFirm     | undefined) ?? EMPTY_FIRM;
+  let clients: AggregatedClient[]   = (agg?.['clients'] as AggregatedClient[] | undefined) ?? [];
+
+  if (matters.length === 0 && (enrichedMatters.length > 0 || timeEntries.length > 0)) {
+    matters = deriveMatterAggregates(enrichedMatters, timeEntries, invoices);
+    firm    = deriveFirmAggregate(matters);
+    clients = deriveClientAggregates(matters, enrichedMatters);
+  }
+
   return {
-    feeEarners:     (agg?.['feeEarners'] as AggregatedFeeEarner[] | undefined) ?? [],
-    matters:        (agg?.['matters']    as AggregatedMatter[]    | undefined) ?? [],
-    clients:        (agg?.['clients']    as AggregatedClient[]    | undefined) ?? [],
-    departments:    (agg?.['departments'] as AggregatedDepartment[] | undefined) ?? [],
-    firm:           (agg?.['firm']       as AggregatedFirm        | undefined) ?? EMPTY_FIRM,
-    dataQuality:    (agg?.['dataQuality'] as { overallScore: number; entityIssues: unknown[]; knownGaps: unknown[] } | undefined) ?? { overallScore: 0, entityIssues: [], knownGaps: [] },
-    timeEntries:    ((timeEntryDoc?.records ?? []) as unknown as EnrichedTimeEntry[]),
-    invoices:       ((invoiceDoc?.records    ?? []) as unknown as EnrichedInvoice[]),
-    disbursements:  ((disbursementDoc?.records ?? []) as unknown as EnrichedDisbursement[]),
-    enrichedMatters: (matterDoc?.records ?? []) as Record<string, unknown>[],
+    feeEarners:     (agg?.['feeEarners']   as AggregatedFeeEarner[]  | undefined) ?? [],
+    matters,
+    clients,
+    departments:    (agg?.['departments']  as AggregatedDepartment[] | undefined) ?? [],
+    firm,
+    dataQuality:    (agg?.['dataQuality']  as { overallScore: number; entityIssues: unknown[]; knownGaps: unknown[] } | undefined) ?? { overallScore: 0, entityIssues: [], knownGaps: [] },
+    timeEntries,
+    invoices,
+    disbursements,
+    enrichedMatters,
     calculatedAt:   null,
   };
 }
@@ -281,10 +462,25 @@ export async function getFirmOverviewData(firmId: string): Promise<FirmOverviewP
   const { invoices } = data;
 
   // KPI cards from kpi_snapshots
-  const firmUtilisation = kpiNumOrNull(firmSnap, 'F-TU-01');
-  const firmRealisation = kpiNumOrNull(firmSnap, 'F-RB-01');
-  const combinedLockup  = kpiNumOrNull(firmSnap, 'F-WL-04');
-  const totalUnbilledWip = kpiNum(firmSnap, 'totalWipValue') || data.firm.totalWipValue;
+  // F-TU-01 and F-RB-01 are not stored as firm-level rows; aggregate from sub-entity snapshots.
+  const utilisationValues = feeEarnerSnaps
+    .filter((s) => s.kpi_key === 'F-TU-01' && s.kpi_value !== null)
+    .map((s) => s.kpi_value as number);
+  const firmUtilisation = utilisationValues.length > 0
+    ? utilisationValues.reduce((a, b) => a + b, 0) / utilisationValues.length
+    : null;
+
+  const realisationValues = matterSnaps
+    .filter((s) => s.kpi_key === 'F-RB-01' && s.kpi_value !== null)
+    .map((s) => s.kpi_value as number);
+  const firmRealisation = realisationValues.length > 0
+    ? realisationValues.reduce((a, b) => a + b, 0) / realisationValues.length
+    : null;
+
+  const combinedLockup   = kpiNumOrNull(firmSnap, 'F-WL-04');
+  // totalUnbilledWip: use derived firm aggregate (computed from time entries when
+  // the legacy MongoDB aggregate is absent)
+  const totalUnbilledWip = data.firm.totalWipValue || 0;
 
   // Utilisation snapshot from fee earner snapshots
   let green = 0, amber = 0, red = 0;
