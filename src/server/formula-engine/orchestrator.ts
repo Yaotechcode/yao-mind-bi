@@ -251,6 +251,27 @@ export class CalculationOrchestrator {
     };
 
     // -------------------------------------------------------------------------
+    // 6b. Diagnostic: log execution plan summary
+    // -------------------------------------------------------------------------
+    const feeEarnerFormulasInPlan = plan.formulaOrder.filter((id) => {
+      const def = formulaDefinitions.find((f) => f.formulaId === id);
+      return def?.entityType === 'feeEarner';
+    });
+    const blockedFeeEarnerFormulas = Array.from(blockedIds).filter((id) => {
+      const def = formulaDefinitions.find((f) => f.formulaId === id);
+      return def?.entityType === 'feeEarner';
+    });
+    console.log(`[orchestrator] execution plan: ${plan.formulaOrder.length} formulas, ${plan.skippedFormulas.length} skipped, ${blockedIds.size} blocked`);
+    console.log(`[orchestrator] fee earner formulas in plan: [${feeEarnerFormulasInPlan.join(', ')}]`);
+    console.log(`[orchestrator] blocked fee earner formulas: [${blockedFeeEarnerFormulas.join(', ')}]`);
+    if (blockedFeeEarnerFormulas.length > 0) {
+      for (const id of blockedFeeEarnerFormulas) {
+        console.log(`[orchestrator] BLOCKED ${id}: ${readiness[id]?.blockedReason ?? 'unknown reason'}`);
+      }
+    }
+    console.log(`[orchestrator] context entity counts — feeEarners:${context.feeEarners.length} matters:${context.matters.length} timeEntries:${context.timeEntries.length}`);
+
+    // -------------------------------------------------------------------------
     // 7. Execute snippets + formulas
     // -------------------------------------------------------------------------
     const engineResult = await engine.executeAll(plan, context);
@@ -389,28 +410,33 @@ export class CalculationOrchestrator {
     clients: AggregatedClient[];
     firm: AggregatedFirm;
   }> {
-    const [kpisDoc, timeEntryDoc, invoiceDoc, disbursementDoc, feeEarnerDoc] = await Promise.all([
+    const [kpisDoc, timeEntryDoc, invoiceDoc, disbursementDoc, feeEarnerDoc, matterDoc] = await Promise.all([
       this.deps.getKpis(firmId),
       this.deps.getEnrichedEntities(firmId, 'timeEntry'),
       this.deps.getEnrichedEntities(firmId, 'invoice'),
       this.deps.getEnrichedEntities(firmId, 'disbursement'),
       this.deps.getEnrichedEntities(firmId, 'feeEarner'),
+      this.deps.getEnrichedEntities(firmId, 'matter'),
     ]);
 
     const aggregate = kpisDoc?.kpis?.['aggregate'] as Record<string, unknown> | undefined;
 
-    // Fee earners from the legacy pipeline aggregate (preferred) or from the
-    // API pull's enriched entity store (fallback). The enriched entities use
-    // NormalisedAttorney field names (_id, fullName) — map them to the
-    // AggregatedFeeEarner shape expected by the formula engine.
-    let feeEarners = (aggregate?.feeEarners ?? []) as AggregatedFeeEarner[];
-    if (feeEarners.length === 0 && (feeEarnerDoc?.records?.length ?? 0) > 0) {
-      feeEarners = (feeEarnerDoc!.records as unknown as Record<string, unknown>[]).map((r) => ({
+    // -------------------------------------------------------------------------
+    // Fee earners: prefer fresh API-pulled data from enriched_entities.feeEarner
+    // over legacy aggregate data. The enriched entities use NormalisedAttorney
+    // field names (_id, fullName) — map them to the AggregatedFeeEarner shape.
+    // Only fall back to aggregate.feeEarners if no enriched entity doc exists.
+    // -------------------------------------------------------------------------
+    const enrichedFeeEarnerRecords = feeEarnerDoc?.records as unknown as Record<string, unknown>[] | undefined;
+    let feeEarners: AggregatedFeeEarner[];
+
+    if ((enrichedFeeEarnerRecords?.length ?? 0) > 0) {
+      feeEarners = enrichedFeeEarnerRecords!.map((r) => ({
         // Identity — formula engine uses lawyerId / lawyerName for grouping
         lawyerId: (r['_id'] as string | undefined),
         lawyerName: (r['fullName'] as string | undefined),
-        // WIP aggregates not available in NormalisedAttorney; formulas that need
-        // them will read from time entries directly (e.g. F-TU-01).
+        // WIP aggregates not available in NormalisedAttorney; formulas compute
+        // them from time entries directly (e.g. F-TU-01 uses context.timeEntries).
         wipTotalHours: 0,
         wipChargeableHours: 0,
         wipNonChargeableHours: 0,
@@ -431,12 +457,66 @@ export class CalculationOrchestrator {
         // so that formulas using dynamic field access can read them.
         ...r,
       } as AggregatedFeeEarner));
-      console.log(`[orchestrator] loadEnrichedData: no aggregate feeEarners — fell back to ${feeEarners.length} enriched entities`);
+      console.log(`[orchestrator] feeEarners: ${feeEarners.length} loaded from enriched_entities (API pull data)`);
+    } else {
+      // Fallback to legacy aggregate (CSV upload pipeline)
+      feeEarners = (aggregate?.feeEarners ?? []) as AggregatedFeeEarner[];
+      console.log(`[orchestrator] feeEarners: ${feeEarners.length} from aggregate (no enriched_entities — enrichedFeeEarnerRecords=${enrichedFeeEarnerRecords?.length ?? 'null'})`);
     }
+
+    // -------------------------------------------------------------------------
+    // Matters: prefer aggregate (has full WIP aggregates from pipeline) but fall
+    // back to enriched_entities.matter (NormalisedMatter shape) when aggregate
+    // has no matter data (e.g. first API pull with no prior legacy pipeline run).
+    // -------------------------------------------------------------------------
+    let matters: AggregatedMatter[];
+    const aggregateMatters = (aggregate?.matters ?? []) as AggregatedMatter[];
+
+    if (aggregateMatters.length > 0) {
+      matters = aggregateMatters;
+      console.log(`[orchestrator] matters: ${matters.length} from aggregate`);
+    } else {
+      // Map NormalisedMatter → AggregatedMatter shape (WIP fields default to 0;
+      // formulas that need per-matter WIP will compute from context.timeEntries).
+      const matterRecords = matterDoc?.records as unknown as Record<string, unknown>[] | undefined;
+      matters = (matterRecords ?? []).map((r) => ({
+        // Identity
+        matterId: (r['_id'] as string | undefined),
+        matterNumber: (r['numberString'] as string | undefined) ?? String(r['number'] ?? ''),
+        // WIP aggregates (zero — formulas compute from context.timeEntries)
+        wipTotalDurationMinutes: 0,
+        wipTotalHours: 0,
+        wipTotalBillable: 0,
+        wipTotalWriteOff: 0,
+        wipTotalUnits: 0,
+        wipTotalChargeable: 0,
+        wipTotalNonChargeable: 0,
+        wipChargeableHours: 0,
+        wipNonChargeableHours: 0,
+        wipOldestEntryDate: null,
+        wipNewestEntryDate: null,
+        wipAgeInDays: null,
+        // Invoice aggregates (zero — formulas compute from context.invoices)
+        invoiceCount: 0,
+        invoicedNetBilling: 0,
+        invoicedDisbursements: 0,
+        invoicedTotal: 0,
+        invoicedOutstanding: 0,
+        invoicedPaid: 0,
+        invoicedWrittenOff: 0,
+        // Pass through all NormalisedMatter fields (budget, isFixedFee, status,
+        // caseName, _id, number, numberString, departmentId, etc.)
+        ...r,
+      } as AggregatedMatter));
+      console.log(`[orchestrator] matters: ${matters.length} from enriched_entities (no aggregate — matterRecords=${matterRecords?.length ?? 'null'})`);
+    }
+
+    // Diagnostic summary
+    console.log(`[orchestrator] loadEnrichedData summary — feeEarners:${feeEarners.length} matters:${matters.length} timeEntries:${timeEntryDoc?.records?.length ?? 0} invoices:${invoiceDoc?.records?.length ?? 0}`);
 
     return {
       feeEarners,
-      matters: (aggregate?.matters ?? []) as AggregatedMatter[],
+      matters,
       clients: (aggregate?.clients ?? []) as AggregatedClient[],
       departments: (aggregate?.departments ?? []) as AggregatedDepartment[],
       firm: (aggregate?.firm ?? EMPTY_FIRM) as AggregatedFirm,
