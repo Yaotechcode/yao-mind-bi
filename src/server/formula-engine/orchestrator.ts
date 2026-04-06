@@ -464,12 +464,34 @@ export class CalculationOrchestrator {
     const enrichedFeeEarnerRecords = feeEarnerDoc?.records as unknown as Record<string, unknown>[] | undefined;
     let feeEarners: AggregatedFeeEarner[];
 
+    // Pre-aggregate chargeable hours per fee earner from time entries
+    const chargeableHoursByLawyer = new Map<string, number>();
+    const timeEntryRecords = ((timeEntryDoc?.records ?? []) as unknown[]) as Array<Record<string, unknown>>;
+    for (const te of timeEntryRecords) {
+      const lawyerId = te['lawyerId'] != null ? String(te['lawyerId']) : null;
+      if (!lawyerId) continue;
+      const isChargeable = te['isChargeable'] === true || (!te['doNotBill'] && (te['billable'] as number ?? 0) > 0);
+      if (!isChargeable) continue;
+      const hours = typeof te['durationHours'] === 'number' ? te['durationHours'] : 0;
+      chargeableHoursByLawyer.set(lawyerId, (chargeableHoursByLawyer.get(lawyerId) ?? 0) + hours);
+    }
+
+    // Pre-aggregate invoiced revenue per fee earner from invoices
+    const invoicedRevenueByLawyer = new Map<string, number>();
+    const invoiceRecords = ((invoiceDoc?.records ?? []) as unknown[]) as Array<Record<string, unknown>>;
+    for (const inv of invoiceRecords) {
+      const lawyerId = inv['responsibleLawyerId'] != null ? String(inv['responsibleLawyerId']) : null;
+      if (!lawyerId) continue;
+      const subtotal = typeof inv['subtotal'] === 'number' ? inv['subtotal'] : 0;
+      invoicedRevenueByLawyer.set(lawyerId, (invoicedRevenueByLawyer.get(lawyerId) ?? 0) + subtotal);
+    }
+
     if ((enrichedFeeEarnerRecords?.length ?? 0) > 0) {
       feeEarners = enrichedFeeEarnerRecords!.map((r) => ({
         // WIP aggregates not available in NormalisedAttorney; formulas compute
         // them from time entries directly (e.g. F-TU-01 uses context.timeEntries).
         wipTotalHours: 0,
-        wipChargeableHours: 0,
+        wipChargeableHours: chargeableHoursByLawyer.get(String(r['_id'] ?? '')) ?? 0,
         wipNonChargeableHours: 0,
         wipChargeableValue: 0,
         wipTotalValue: 0,
@@ -481,7 +503,7 @@ export class CalculationOrchestrator {
         wipNewestEntryDate: null,
         wipEntryCount: 0,
         recordingGapDays: null,
-        invoicedRevenue: 0,
+        invoicedRevenue: invoicedRevenueByLawyer.get(String(r['_id'] ?? '')) ?? 0,
         invoicedOutstanding: 0,
         invoicedCount: 0,
         // Pass through all extra fields (payModel, rate, grade, status, etc.)
@@ -493,7 +515,10 @@ export class CalculationOrchestrator {
         lawyerId: r['_id'] != null ? String(r['_id']) : undefined,
         lawyerName: r['fullName'] != null ? String(r['fullName']) : undefined,
       } as AggregatedFeeEarner));
+      const totalChargeableHours = [...chargeableHoursByLawyer.values()].reduce((a, b) => a + b, 0);
+      const totalInvoicedRevenue = [...invoicedRevenueByLawyer.values()].reduce((a, b) => a + b, 0);
       console.log(`[orchestrator] feeEarners: ${feeEarners.length} loaded from enriched_entities (API pull data)`);
+      console.log(`[orchestrator] pre-aggregated — chargeableHours: ${totalChargeableHours.toFixed(1)}, invoicedRevenue: £${totalInvoicedRevenue.toFixed(0)}`);
     } else {
       // Fallback to legacy aggregate (CSV upload pipeline)
       feeEarners = (aggregate?.feeEarners ?? []) as AggregatedFeeEarner[];

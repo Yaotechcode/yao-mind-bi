@@ -587,13 +587,20 @@ export async function getFeeEarnerPerformanceData(
   firmId: string,
   filters: DashboardFilters = {},
 ): Promise<FeeEarnerPerformancePayload> {
-  // Load only from kpi_snapshots — MongoDB enriched_entities for 'feeEarner'
-  // contains stale CSV pipeline data that contaminates names and attributes.
-  // All required data (entity_id, entity_name, KPI values) is in kpi_snapshots.
-  const [feeEarnerSnaps, firmConfig] = await Promise.all([
+  // Load kpi_snapshots, firm config, and enriched fee earner attributes from MongoDB
+  const [feeEarnerSnaps, firmConfig, feeEarnerDoc] = await Promise.all([
     getKpiSnapshots(firmId, { entityType: 'feeEarner', period: 'current' }),
     getFirmConfig(firmId),
+    getLatestEnrichedEntities(firmId, 'feeEarner'),
   ]);
+
+  // Build lookup map: _id string → enriched record (for department, grade, etc.)
+  const feeEarnerRecords = (feeEarnerDoc?.records ?? []) as Array<Record<string, unknown>>;
+  const feeEarnerAttrMap = new Map<string, Record<string, unknown>>();
+  for (const r of feeEarnerRecords) {
+    const id = r['_id'] != null ? String(r['_id']) : null;
+    if (id) feeEarnerAttrMap.set(id, r);
+  }
 
   const weeklyTarget = firmConfig.weeklyTargetHours ?? 37.5;
 
@@ -618,12 +625,14 @@ export async function getFeeEarnerPerformanceData(
       snap.values().next().value?.entity_name ??
       entityId;
 
-    // Attributes not yet stored in kpi_snapshots — default to safe values.
-    // department, grade, payModel will be added when enrichment is extended.
-    const department: string | null = null;
-    const grade: string | null      = null;
-    const payModel: string | null   = null;
-    const isActive                  = true;   // all API-pulled attorneys are active
+    // Attributes from enriched_entities (department, grade, payModel, hours)
+    const feAttr     = feeEarnerAttrMap.get(entityId);
+    const department = (feAttr?.['departmentName'] as string | null) ?? null;
+    const grade      = (feAttr?.['grade'] as string | null)
+      ?? (feAttr?.['jobTitle'] as string | null)
+      ?? null;
+    const payModel   = (feAttr?.['payModel'] as string | null) ?? null;
+    const isActive   = true;   // all API-pulled attorneys are active
 
     // KPI values from kpi_snapshots (formula IDs)
     const utilisation      = kpiNumOrNull(snap, 'F-TU-01');
@@ -636,9 +645,13 @@ export async function getFeeEarnerPerformanceData(
     const profit           = kpiNumOrNull(snap, 'F-PR-02');
     // F-WL-02 has matter-level rows (575 rows); not yet aggregated per fee earner
     const writeOffRate     = 0;
-    // chargeableHours / totalHours / wipValue / matterCount not yet in kpi_snapshots
-    const chargeableHours  = 0;
-    const totalHours       = 0;
+    // chargeableHours / totalHours from pre-aggregated enriched record
+    const chargeableHours  = typeof feAttr?.['wipChargeableHours'] === 'number'
+      ? feAttr['wipChargeableHours'] as number
+      : 0;
+    const totalHours       = typeof feAttr?.['wipTotalHours'] === 'number'
+      ? feAttr['wipTotalHours'] as number
+      : 0;
     const wipValueRecorded = 0;
     const matterCount      = 0;
     const employmentCost: number | null   = null;
