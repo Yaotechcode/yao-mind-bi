@@ -351,6 +351,12 @@ export interface MatterRow {
 }
 
 export interface MatterPayload {
+  headlines: {
+    activeMatterCount: number;
+    totalWipValue: number;
+    avgMatterAge: number | null;
+    avgRealisation: number | null;
+  };
   mattersAtRisk: MatterAtRisk[];
   matters: MatterRow[];
   pagination: PaginationMeta;

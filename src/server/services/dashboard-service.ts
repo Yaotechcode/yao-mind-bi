@@ -72,16 +72,6 @@ export interface DashboardFilters {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns the distinct kpi_key values present in kpi_snapshots for a given
- * entity type. Call at the start of each dashboard function for diagnostics.
- */
-async function getAvailableKpiKeys(firmId: string, entityType: string): Promise<string[]> {
-  const rows = await getKpiSnapshots(firmId, { entityType, period: 'current' });
-  const keys = [...new Set(rows.map((r) => r.kpi_key))].sort();
-  return keys;
-}
-
-/**
  * Groups a flat array of KpiSnapshotRows by entity_id.
  * Returns Map<entity_id, Map<kpi_key, KpiSnapshotRow>>.
  */
@@ -437,16 +427,6 @@ function applyRagThreshold(value: number, defaults: ThresholdDefaults): RagStatu
 // ---------------------------------------------------------------------------
 
 export async function getFirmOverviewData(firmId: string): Promise<FirmOverviewPayload> {
-  // Diagnostic: log available kpi_keys for each entity type
-  const [feeEarnerKeys, matterKeys, firmKeys] = await Promise.all([
-    getAvailableKpiKeys(firmId, 'feeEarner'),
-    getAvailableKpiKeys(firmId, 'matter'),
-    getAvailableKpiKeys(firmId, 'firm'),
-  ]);
-  console.log('[dashboard/firm-overview] feeEarner kpi_keys:', feeEarnerKeys);
-  console.log('[dashboard/firm-overview] matter kpi_keys:', matterKeys);
-  console.log('[dashboard/firm-overview] firm kpi_keys:', firmKeys);
-
   const [feeEarnerSnaps, matterSnaps, firmSnaps, data] = await Promise.all([
     getKpiSnapshots(firmId, { entityType: 'feeEarner', period: 'current' }),
     getKpiSnapshots(firmId, { entityType: 'matter', period: 'current' }),
@@ -607,9 +587,6 @@ export async function getFeeEarnerPerformanceData(
   firmId: string,
   filters: DashboardFilters = {},
 ): Promise<FeeEarnerPerformancePayload> {
-  const availableKeys = await getAvailableKpiKeys(firmId, 'feeEarner');
-  console.log('[dashboard/fee-earner-performance] feeEarner kpi_keys:', availableKeys);
-
   // Load only from kpi_snapshots — MongoDB enriched_entities for 'feeEarner'
   // contains stale CSV pipeline data that contaminates names and attributes.
   // All required data (entity_id, entity_name, KPI values) is in kpi_snapshots.
@@ -739,9 +716,6 @@ export async function getWipData(
   firmId: string,
   filters: DashboardFilters = {},
 ): Promise<WipPayload> {
-  const availableKeys = await getAvailableKpiKeys(firmId, 'matter');
-  console.log('[dashboard/wip] matter kpi_keys:', availableKeys);
-
   const [data, firmConfig] = await Promise.all([loadDashboardData(firmId), getFirmConfig(firmId)]);
   const { matters, timeEntries, disbursements, enrichedMatters } = data;
   const ragThresholds = firmConfig.ragThresholds ?? [];
@@ -913,9 +887,6 @@ export async function getBillingCollectionsData(
   firmId: string,
   filters: DashboardFilters = {},
 ): Promise<BillingPayload> {
-  const availableKeys = await getAvailableKpiKeys(firmId, 'invoice');
-  console.log('[dashboard/billing] invoice kpi_keys:', availableKeys);
-
   const [firmSnaps, data] = await Promise.all([
     getKpiSnapshots(firmId, { entityType: 'firm', period: 'current' }),
     loadDashboardData(firmId),
@@ -1022,9 +993,14 @@ export async function getBillingCollectionsData(
 
   // Firm totals — prefer kpi_snapshots, fall back to MongoDB aggregate
   const totalWipValue     = kpiNum(firmSnap, 'totalWipValue') || firm.totalWipValue;
-  const totalOutstanding  = kpiNum(firmSnap, 'totalOutstanding') || firm.totalOutstanding;
   const totalInvoiced     = kpiNum(firmSnap, 'totalInvoicedRevenue') || firm.totalInvoicedRevenue;
   const totalPaid         = kpiNum(firmSnap, 'totalPaid') || firm.totalPaid;
+  // Sum outstanding directly from invoices — the derived firm aggregate may be
+  // zero when matterNumber join fails on the API pull path.
+  const totalOutstanding  = filteredInvoices.reduce((s, inv) => {
+    const invRec = inv as unknown as Record<string, unknown>;
+    return s + ((invRec['outstanding'] as number | undefined) ?? 0);
+  }, 0) || kpiNum(firmSnap, 'totalOutstanding') || firm.totalOutstanding;
   const totalWriteOffValue = kpiNum(firmSnap, 'totalWriteOffValue') || firm.totalWriteOffValue;
   const lockupDays        = kpiNumOrNull(firmSnap, 'F-WL-04');
 
@@ -1063,9 +1039,6 @@ export async function getMatterAnalysisData(
   firmId: string,
   filters: DashboardFilters = {},
 ): Promise<MatterPayload> {
-  const availableKeys = await getAvailableKpiKeys(firmId, 'matter');
-  console.log('[dashboard/matters] matter kpi_keys:', availableKeys);
-
   const [matterSnaps, data, firmConfig] = await Promise.all([
     getKpiSnapshots(firmId, { entityType: 'matter', period: 'current' }),
     loadDashboardData(firmId),
@@ -1236,7 +1209,22 @@ export async function getMatterAnalysisData(
   const allStatuses  = [...new Set(enrichedMatters.map(em => (em['matterStatus'] as string | undefined) ?? '').filter(Boolean))];
   const allLawyers   = [...new Set(enrichedMatters.map(em => (em['responsibleLawyer'] as string | undefined) ?? '').filter(Boolean))];
 
+  // Headlines — computed from all filtered matters (not just current page)
+  const activeMatterCount = filtered.filter(m => m.wipTotalBillable > 0 || m.invoicedOutstanding > 0).length;
+  const totalWipValue = filtered.reduce((s, m) => s + m.wipTotalBillable, 0);
+  const agesWithValues = filtered.map(m => m.wipAgeInDays).filter((a): a is number => a !== null && a !== undefined);
+  const avgMatterAge = agesWithValues.length > 0
+    ? agesWithValues.reduce((s, a) => s + a, 0) / agesWithValues.length
+    : null;
+  const realisations = filtered
+    .filter(m => m.wipTotalBillable > 0 && m.invoicedNetBilling > 0)
+    .map(m => (m.invoicedNetBilling / m.wipTotalBillable) * 100);
+  const avgRealisation = realisations.length > 0
+    ? realisations.reduce((s, r) => s + r, 0) / realisations.length
+    : null;
+
   return {
+    headlines: { activeMatterCount, totalWipValue, avgMatterAge, avgRealisation },
     mattersAtRisk,
     matters: rows,
     pagination: { totalCount, limit: filters.limit ?? 50, offset: filters.offset ?? 0 },
@@ -1254,9 +1242,6 @@ export async function getClientIntelligenceData(
   firmId: string,
   filters: DashboardFilters = {},
 ): Promise<ClientPayload> {
-  const availableKeys = await getAvailableKpiKeys(firmId, 'client');
-  console.log('[dashboard/clients] client kpi_keys:', availableKeys);
-
   const data = await loadDashboardData(firmId);
   const { clients, matters, enrichedMatters, invoices } = data;
 

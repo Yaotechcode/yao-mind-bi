@@ -57,15 +57,16 @@ export function buildSnapshotsFromKpiResults(
   const formulaResults = kpiResults.kpis['formulaResults'] ?? {};
   const ragAssignments = kpiResults.kpis['ragAssignments'] ?? {};
 
-  console.log('[kpi-snapshot-builder] Input keys:', Object.keys(kpiResults.kpis ?? {}));
-  console.log('[kpi-snapshot-builder] formulaResults sample:',
-    JSON.stringify(Object.entries(formulaResults).slice(0, 3).map(([id, r]) => ({
-      formulaId: id,
-      entityCount: Object.keys(r.entityResults ?? {}).length,
-      sampleEntityId: Object.keys(r.entityResults ?? {})[0],
-      sampleEntityName: Object.values(r.entityResults ?? {})[0]?.entityName,
-    })), null, 2));
-
+  if (process.env.DEBUG_PIPELINE === 'true') {
+    console.log('[kpi-snapshot-builder] Input keys:', Object.keys(kpiResults.kpis ?? {}));
+    console.log('[kpi-snapshot-builder] formulaResults sample:',
+      JSON.stringify(Object.entries(formulaResults).slice(0, 3).map(([id, r]) => ({
+        formulaId: id,
+        entityCount: Object.keys(r.entityResults ?? {}).length,
+        sampleEntityId: Object.keys(r.entityResults ?? {})[0],
+        sampleEntityName: Object.values(r.entityResults ?? {})[0]?.entityName,
+      })), null, 2));
+  }
 
   const entityTypeMap = buildEntityTypeMap();
   const rows: KpiSnapshotRow[] = [];
@@ -74,18 +75,6 @@ export function buildSnapshotsFromKpiResults(
     const entityType = entityTypeMap.get(formulaId) ?? 'firm';
     const formulaRagMap = ragAssignments[formulaId] ?? {};
     const entityResults = result.entityResults ?? {};
-
-    if (formulaId === 'F-TU-01') {
-      const entityEntries = Object.entries(entityResults).slice(0, 3);
-      console.log('[snapshot-builder] F-TU-01 entityResults sample:',
-        JSON.stringify(entityEntries.map(([id, r]) => ({
-          entityId: id,
-          entityName: (r as Record<string, unknown>)['entityName'],
-          value: (r as Record<string, unknown>)['value'],
-          nullReason: (r as Record<string, unknown>)['nullReason'],
-        })), null, 2));
-      console.log(`[snapshot-builder] F-TU-01 total entityResults: ${Object.keys(entityResults).length}`);
-    }
 
     for (const [entityId, entityResult] of Object.entries(entityResults)) {
       const ragAssignment = formulaRagMap[entityId];
