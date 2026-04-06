@@ -220,19 +220,29 @@ export class CalculationOrchestrator {
 
       // Re-aggregate invoicedRevenue and wipChargeableHours per fee earner
       // from the window-filtered records so that formula results respect the window.
-      const BILLABLE_STATUSES_WINDOW = new Set(['ISSUED', 'PAID', 'CREDITED']);
+      // Uses the same BILLABLE_STATUSES set as the main aggregation (WRITTEN_OFF included).
+      const BILLABLE_STATUSES_WINDOW = new Set(['ISSUED', 'PAID', 'CREDITED', 'WRITTEN_OFF']);
+      const windowActiveIds = new Set<string>(
+        enrichedData.feeEarners.map((fe) => {
+          const r = fe as unknown as Record<string, unknown>;
+          return String(r['lawyerId'] ?? r['_id'] ?? '');
+        }).filter(Boolean),
+      );
       const filteredRevenueByLawyer = new Map<string, number>();
+      let windowFirmRevenue = 0;
       for (const inv of enrichedData.invoices) {
         const r = inv as unknown as Record<string, unknown>;
         const status = typeof r['status'] === 'string' ? r['status'] : '';
         if (!BILLABLE_STATUSES_WINDOW.has(status)) continue;
-        const lawyerId = r['responsibleLawyerId'] != null ? String(r['responsibleLawyerId']) : null;
-        if (!lawyerId) continue;
         const feeRev = typeof r['feeEarnerRevenue'] === 'number'
           ? r['feeEarnerRevenue']
           : (typeof r['subtotal'] === 'number' ? r['subtotal'] : 0)
             - (typeof r['totalFirmFees'] === 'number' ? r['totalFirmFees'] : 0)
             - (typeof r['totalDisbursements'] === 'number' ? r['totalDisbursements'] : 0);
+        windowFirmRevenue += feeRev;
+        const lawyerId = r['responsibleLawyerId'] != null ? String(r['responsibleLawyerId']) : null;
+        if (!lawyerId) continue;
+        if (windowActiveIds.size > 0 && !windowActiveIds.has(lawyerId)) continue; // skip disabled attorneys
         filteredRevenueByLawyer.set(lawyerId, (filteredRevenueByLawyer.get(lawyerId) ?? 0) + feeRev);
       }
       const filteredHoursByLawyer = new Map<string, number>();
@@ -252,11 +262,16 @@ export class CalculationOrchestrator {
           wipChargeableHours: filteredHoursByLawyer.get(id) ?? 0,
         };
       });
+      // Patch firm-level totalInvoicedRevenue to reflect the window-filtered sum
+      if (windowFirmRevenue > 0) {
+        enrichedData.firm = { ...enrichedData.firm, totalInvoicedRevenue: windowFirmRevenue };
+      }
 
       console.log(
         `[orchestrator] calculation window: ${windowMonths} months (cutoff ${cutoffIso}) — ` +
         `invoices ${prevInvoiceCount}→${enrichedData.invoices.length}, ` +
-        `timeEntries ${prevTeCount}→${enrichedData.timeEntries.length}`,
+        `timeEntries ${prevTeCount}→${enrichedData.timeEntries.length}, ` +
+        `firmRevenue: £${windowFirmRevenue.toFixed(0)}`,
       );
     }
 
@@ -539,23 +554,56 @@ export class CalculationOrchestrator {
       chargeableHoursByLawyer.set(lawyerId, (chargeableHoursByLawyer.get(lawyerId) ?? 0) + hours);
     }
 
-    // Pre-aggregate invoiced revenue per fee earner from invoices (billable statuses only)
-    const BILLABLE_STATUSES = new Set(['ISSUED', 'PAID', 'CREDITED']);
+    // Pre-aggregate invoiced revenue per fee earner from invoices (billable statuses only).
+    // WRITTEN_OFF is included: the invoice was raised and counts as revenue even if partially
+    // written off — write-off amount is separately tracked in wipTotalWriteOff.
+    const BILLABLE_STATUSES = new Set(['ISSUED', 'PAID', 'CREDITED', 'WRITTEN_OFF']);
+
+    // Build set of active attorney IDs so we can detect disabled-attorney invoices.
+    const activeAttorneyIds = new Set<string>(
+      (enrichedFeeEarnerRecords ?? []).map((r) => String(r['_id'] ?? '')).filter(Boolean),
+    );
+
     const invoicedRevenueByLawyer = new Map<string, number>();
+    let unattributedRevenue = 0;
+    let unattributedCount = 0;
+    let attributedCount = 0;
+    let firmInvoicedRevenue = 0; // sum across ALL BILLABLE_STATUSES invoices regardless of attribution
+
     const invoiceRecords = ((invoiceDoc?.records ?? []) as unknown[]) as Array<Record<string, unknown>>;
     for (const inv of invoiceRecords) {
       const status = typeof inv['status'] === 'string' ? inv['status'] : '';
       if (!BILLABLE_STATUSES.has(status)) continue;
-      const lawyerId = inv['responsibleLawyerId'] != null ? String(inv['responsibleLawyerId']) : null;
-      if (!lawyerId) continue;
+
       // Use feeEarnerRevenue when available; fall back to subtotal - totalFirmFees - totalDisbursements
       const feeEarnerRevenue = typeof inv['feeEarnerRevenue'] === 'number'
         ? inv['feeEarnerRevenue']
         : (typeof inv['subtotal'] === 'number' ? inv['subtotal'] : 0)
           - (typeof inv['totalFirmFees'] === 'number' ? inv['totalFirmFees'] : 0)
           - (typeof inv['totalDisbursements'] === 'number' ? inv['totalDisbursements'] : 0);
+
+      firmInvoicedRevenue += feeEarnerRevenue;
+
+      const lawyerId = inv['responsibleLawyerId'] != null ? String(inv['responsibleLawyerId']) : null;
+      if (!lawyerId) continue;
+
+      if (activeAttorneyIds.size > 0 && !activeAttorneyIds.has(lawyerId)) {
+        // Invoice belongs to a disabled or unknown attorney — track separately, do NOT
+        // assign to any fee earner's invoicedRevenue to avoid polluting active earner totals.
+        unattributedRevenue += feeEarnerRevenue;
+        unattributedCount += 1;
+        continue;
+      }
+
       invoicedRevenueByLawyer.set(lawyerId, (invoicedRevenueByLawyer.get(lawyerId) ?? 0) + feeEarnerRevenue);
+      attributedCount += 1;
     }
+
+    const attributedRevenue = [...invoicedRevenueByLawyer.values()].reduce((a, b) => a + b, 0);
+    console.log(
+      `[orchestrator] revenue attribution — attributed: £${attributedRevenue.toFixed(0)} (${attributedCount} invoices), ` +
+      `unattributed: £${unattributedRevenue.toFixed(0)} (${unattributedCount} invoices, disabled/unknown attorneys)`,
+    );
 
     if ((enrichedFeeEarnerRecords?.length ?? 0) > 0) {
       feeEarners = enrichedFeeEarnerRecords!.map((r) => ({
@@ -587,9 +635,8 @@ export class CalculationOrchestrator {
         lawyerName: r['fullName'] != null ? String(r['fullName']) : undefined,
       } as AggregatedFeeEarner));
       const totalChargeableHours = [...chargeableHoursByLawyer.values()].reduce((a, b) => a + b, 0);
-      const totalInvoicedRevenue = [...invoicedRevenueByLawyer.values()].reduce((a, b) => a + b, 0);
       console.log(`[orchestrator] feeEarners: ${feeEarners.length} loaded from enriched_entities (API pull data)`);
-      console.log(`[orchestrator] pre-aggregated — chargeableHours: ${totalChargeableHours.toFixed(1)}, invoicedRevenue: £${totalInvoicedRevenue.toFixed(0)}`);
+      console.log(`[orchestrator] pre-aggregated — chargeableHours: ${totalChargeableHours.toFixed(1)}, invoicedRevenue (attributed): £${attributedRevenue.toFixed(0)}, firm total: £${firmInvoicedRevenue.toFixed(0)}`);
     } else {
       // Fallback to legacy aggregate (CSV upload pipeline)
       feeEarners = (aggregate?.feeEarners ?? []) as AggregatedFeeEarner[];
@@ -651,7 +698,16 @@ export class CalculationOrchestrator {
       matters,
       clients: (aggregate?.clients ?? []) as AggregatedClient[],
       departments: (aggregate?.departments ?? []) as AggregatedDepartment[],
-      firm: (aggregate?.firm ?? EMPTY_FIRM) as AggregatedFirm,
+      // Override totalInvoicedRevenue with the invoice-derived firm total so that
+      // F-PR-05 firm profitability includes both attributed and unattributed revenue
+      // (unattributed = invoices from disabled/unknown attorneys that are not assigned
+      // to any active fee earner's invoicedRevenue but still represent real firm income).
+      firm: {
+        ...((aggregate?.firm ?? EMPTY_FIRM) as AggregatedFirm),
+        totalInvoicedRevenue: firmInvoicedRevenue > 0
+          ? firmInvoicedRevenue
+          : ((aggregate?.firm as AggregatedFirm | undefined)?.totalInvoicedRevenue ?? 0),
+      },
       timeEntries: ((timeEntryDoc?.records ?? []) as unknown[]) as EnrichedTimeEntry[],
       invoices: ((invoiceDoc?.records ?? []) as unknown[]) as EnrichedInvoice[],
       disbursements: ((disbursementDoc?.records ?? []) as unknown[]) as EnrichedDisbursement[],
