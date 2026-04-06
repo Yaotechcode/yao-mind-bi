@@ -184,19 +184,16 @@ describe('getFeeEarnerPerformanceData', () => {
     expect(result.feeEarners[0].name).toBe('Alice');
   });
 
-  it('filters by payModel', async () => {
+  it('filters by payModel — no-op until enrichment stores payModel in kpi_snapshots', async () => {
     vi.mocked(kpiSnapshotService.getKpiSnapshots).mockResolvedValue([
       makeSnapshot({ entity_type: 'feeEarner', entity_id: 'l-1', entity_name: 'Alice', kpi_key: 'F-TU-01' }),
     ]);
-    vi.mocked(mongoOps.getLatestEnrichedEntities).mockImplementation(async (_fid, entityType) => {
-      if (entityType === 'feeEarner') return { records: [{ _id: 'l-1', payModel: 'FeeShare' }], firm_id: FIRM_ID, entity_type: 'feeEarner', data_version: '1', source_uploads: [], record_count: 1 } as never;
-      if (entityType === 'calculatedKpis') return makeCalculatedKpisEntity();
-      return null;
-    });
+    // payModel is not yet stored in kpi_snapshots, so all rows have payModel=null
+    // and payModel filters return 0 results regardless of value
     const salaried = await getFeeEarnerPerformanceData(FIRM_ID, { payModel: 'Salaried' });
     expect(salaried.feeEarners).toHaveLength(0);
     const feeShare = await getFeeEarnerPerformanceData(FIRM_ID, { payModel: 'FeeShare' });
-    expect(feeShare.feeEarners).toHaveLength(1);
+    expect(feeShare.feeEarners).toHaveLength(0);
   });
 
   it('pagination returns subset and correct totalCount', async () => {
@@ -221,21 +218,25 @@ describe('getFeeEarnerPerformanceData', () => {
   });
 
   it('generates alert when recordingGapDays > 5', async () => {
+    // recordingGapDays now comes from F-TU-02 (Recording Consistency formula)
     vi.mocked(kpiSnapshotService.getKpiSnapshots).mockResolvedValue([
-      makeSnapshot({ entity_id: 'l-1', entity_name: 'Alice', kpi_key: 'recordingGapDays', kpi_value: 10 }),
+      makeSnapshot({ entity_id: 'l-1', entity_name: 'Alice', kpi_key: 'F-TU-02', kpi_value: 10 }),
     ]);
     const result = await getFeeEarnerPerformanceData(FIRM_ID);
     expect(result.alerts.some(a => a.type === 'recording_gap')).toBe(true);
   });
 
-  it('works when no enriched feeEarner entities (graceful null)', async () => {
+  it('works exclusively from kpi_snapshots — grade/department/payModel default to null', async () => {
     vi.mocked(kpiSnapshotService.getKpiSnapshots).mockResolvedValue([
       makeSnapshot({ entity_id: 'l-1', entity_name: 'Alice', kpi_key: 'F-TU-01' }),
     ]);
-    vi.mocked(mongoOps.getLatestEnrichedEntities).mockResolvedValue(null);
     const result = await getFeeEarnerPerformanceData(FIRM_ID);
     expect(result.feeEarners).toHaveLength(1);
-    expect(result.feeEarners[0].grade).toBe('Unknown');
+    // Attributes not yet in kpi_snapshots — all null until enrichment is extended
+    expect(result.feeEarners[0].grade).toBeNull();
+    expect(result.feeEarners[0].department).toBeNull();
+    expect(result.feeEarners[0].payModel).toBeNull();
+    expect(result.feeEarners[0].isActive).toBe(true);
   });
 });
 

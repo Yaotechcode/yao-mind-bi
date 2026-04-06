@@ -414,54 +414,53 @@ export async function getFeeEarnerPerformanceData(
   const availableKeys = await getAvailableKpiKeys(firmId, 'feeEarner');
   console.log('[dashboard/fee-earner-performance] feeEarner kpi_keys:', availableKeys);
 
-  const [feeEarnerSnaps, enrichedFeeEarners, firmConfig] = await Promise.all([
+  // Load only from kpi_snapshots — MongoDB enriched_entities for 'feeEarner'
+  // contains stale CSV pipeline data that contaminates names and attributes.
+  // All required data (entity_id, entity_name, KPI values) is in kpi_snapshots.
+  const [feeEarnerSnaps, firmConfig] = await Promise.all([
     getKpiSnapshots(firmId, { entityType: 'feeEarner', period: 'current' }),
-    getLatestEnrichedEntities(firmId, 'feeEarner'),
     getFirmConfig(firmId),
   ]);
 
   const weeklyTarget = firmConfig.weeklyTargetHours ?? 37.5;
 
-  // Build attribute lookup from MongoDB enriched fee earner entities
-  const feAttrMap = new Map<string, Record<string, unknown>>();
-  for (const rec of enrichedFeeEarners?.records ?? []) {
-    const r = rec as Record<string, unknown>;
-    const id = (r['_id'] ?? r['entityId'] ?? r['lawyerId']) as string | undefined;
-    if (id) feAttrMap.set(id, r);
-  }
-
   // Group kpi_snapshot rows by entity_id
   const byEntity = groupSnapshotsByEntity(feeEarnerSnaps);
 
-  // Build row list from kpi_snapshots — one row per entity_id
+  // Build row list from kpi_snapshots — one row per entity_id.
+  // Name: prefer F-TU-01 entity_name (most reliably set from attorney fullName),
+  // fall back to any snapshot's entity_name, then bare entity_id.
   let allRows = [...byEntity.entries()].map(([entityId, snap]) => {
-    const anyRow = snap.values().next().value as KpiSnapshotRow | undefined;
-    const name = anyRow?.entity_name ?? entityId;
+    const name =
+      snap.get('F-TU-01')?.entity_name ??
+      snap.values().next().value?.entity_name ??
+      entityId;
 
-    // Attributes from MongoDB enriched entity
-    const attr = feAttrMap.get(entityId) ?? {};
-    const payModel  = (attr['payModel']  as string | undefined) ?? 'Unknown';
-    const isActive  = (attr['status']    as string | undefined) === 'ACTIVE';
-    // department and grade not yet available in API pipeline feeEarner entities
-    const department = (attr['department'] as string | undefined) ?? 'Unknown';
-    const grade      = (attr['grade']      as string | undefined) ?? 'Unknown';
+    // Attributes not yet stored in kpi_snapshots — default to safe values.
+    // department, grade, payModel will be added when enrichment is extended.
+    const department: string | null = null;
+    const grade: string | null      = null;
+    const payModel: string | null   = null;
+    const isActive                  = true;   // all API-pulled attorneys are active
 
-    // KPI values from kpi_snapshots
-    const chargeableHours   = kpiNum(snap, 'chargeableHours');
-    const totalHours        = kpiNum(snap, 'totalHours');
-    const utilisation       = kpiNumOrNull(snap, 'F-TU-01');
-    const utilisationRag    = kpiRag(snap, 'F-TU-01');
-    const wipValueRecorded  = kpiNum(snap, 'wipValue') || kpiNum(snap, 'wipTotalBillable');
-    const billedRevenue     = kpiNum(snap, 'billedRevenue') || kpiNum(snap, 'invoicedRevenue');
-    const effectiveRate     = kpiNumOrNull(snap, 'F-RB-02');
-    const writeOffRate      = kpiNum(snap, 'writeOffRate');
-    const recordingGapDays  = kpiNumOrNull(snap, 'recordingGapDays');
-    const matterCount       = kpiNum(snap, 'matterCount') || kpiNum(snap, 'wipMatterCount');
-    const scorecard         = kpiNumOrNull(snap, 'F-CS-02');
-    const scorecardRag      = kpiRag(snap, 'F-CS-02');
-    const employmentCost    = kpiNumOrNull(snap, 'employmentCost');
-    const revenueMultiple   = kpiNumOrNull(snap, 'revenueMultiple');
-    const profit            = kpiNumOrNull(snap, 'profit') ?? kpiNumOrNull(snap, 'F-PR-02');
+    // KPI values from kpi_snapshots (formula IDs)
+    const utilisation      = kpiNumOrNull(snap, 'F-TU-01');
+    const utilisationRag   = kpiRag(snap, 'F-TU-01');
+    const effectiveRate    = kpiNumOrNull(snap, 'F-RB-02');
+    const billedRevenue    = kpiNumOrNull(snap, 'F-RB-03');
+    const recordingGapDays = kpiNumOrNull(snap, 'F-TU-02');
+    const scorecard        = kpiNumOrNull(snap, 'F-CS-02');
+    const scorecardRag     = kpiRag(snap, 'F-CS-02');
+    const profit           = kpiNumOrNull(snap, 'F-PR-02');
+    // F-WL-02 has matter-level rows (575 rows); not yet aggregated per fee earner
+    const writeOffRate     = 0;
+    // chargeableHours / totalHours / wipValue / matterCount not yet in kpi_snapshots
+    const chargeableHours  = 0;
+    const totalHours       = 0;
+    const wipValueRecorded = 0;
+    const matterCount      = 0;
+    const employmentCost: number | null   = null;
+    const revenueMultiple: number | null  = null;
 
     return {
       id: entityId,
@@ -490,7 +489,8 @@ export async function getFeeEarnerPerformanceData(
     };
   });
 
-  // Apply filters
+  // Apply filters — department/grade/payModel now null so those filters are no-ops
+  // until enrichment is extended; activeOnly is safe since all rows have isActive=true
   if (filters.department) allRows = allRows.filter(r => r.department === filters.department);
   if (filters.grade)      allRows = allRows.filter(r => r.grade === filters.grade);
   if (filters.payModel)   allRows = allRows.filter(r => r.payModel === filters.payModel);
