@@ -276,6 +276,16 @@ export class CalculationOrchestrator {
     // -------------------------------------------------------------------------
     const engineResult = await engine.executeAll(plan, context);
 
+    // Log any formula execution errors so they're visible in Netlify logs
+    if (engineResult.errors.length > 0) {
+      console.error(`[orchestrator] ${engineResult.errors.length} formula(s) threw during execution:`);
+      for (const e of engineResult.errors) {
+        console.error(`  [orchestrator] formula error — ${e.formulaId}: ${e.error}`);
+      }
+    }
+    console.log(`[orchestrator] formula execution complete — success:${engineResult.successCount} errors:${engineResult.errorCount} results:${Object.keys(engineResult.results).length}`);
+    console.log(`[orchestrator] result keys: [${Object.keys(engineResult.results).join(', ')}]`);
+
     // -------------------------------------------------------------------------
     // 8. RAG evaluation
     // -------------------------------------------------------------------------
@@ -447,9 +457,6 @@ export class CalculationOrchestrator {
 
     if ((enrichedFeeEarnerRecords?.length ?? 0) > 0) {
       feeEarners = enrichedFeeEarnerRecords!.map((r) => ({
-        // Identity — formula engine uses lawyerId / lawyerName for grouping
-        lawyerId: (r['_id'] as string | undefined),
-        lawyerName: (r['fullName'] as string | undefined),
         // WIP aggregates not available in NormalisedAttorney; formulas compute
         // them from time entries directly (e.g. F-TU-01 uses context.timeEntries).
         wipTotalHours: 0,
@@ -469,8 +476,13 @@ export class CalculationOrchestrator {
         invoicedOutstanding: 0,
         invoicedCount: 0,
         // Pass through all extra fields (payModel, rate, grade, status, etc.)
-        // so that formulas using dynamic field access can read them.
         ...r,
+        // Identity fields MUST come after ...r to guarantee they are set correctly.
+        // r['_id'] may be a MongoDB ObjectId object if the Yao attorney _id is a
+        // 24-hex string — calling .toString() ensures a plain string comparison
+        // against entry.lawyerId (which is always set as a string via transformTimeEntry).
+        lawyerId: r['_id'] != null ? String(r['_id']) : undefined,
+        lawyerName: r['fullName'] != null ? String(r['fullName']) : undefined,
       } as AggregatedFeeEarner));
       console.log(`[orchestrator] feeEarners: ${feeEarners.length} loaded from enriched_entities (API pull data)`);
     } else {

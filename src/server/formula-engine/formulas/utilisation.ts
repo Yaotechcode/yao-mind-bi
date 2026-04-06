@@ -172,6 +172,24 @@ export const chargeableUtilisationRate: FormulaImplementation = {
     const nullReasons = new Set<string>();
     const warnings: string[] = [];
 
+    // Diagnostic: log first fee earner and time entry IDs to verify join keys
+    if (context.feeEarners.length > 0 && context.timeEntries.length > 0) {
+      const firstFe = context.feeEarners[0];
+      const firstEntry = context.timeEntries[0];
+      console.log(
+        `[F-TU-01] id diagnostic — feeEarner.lawyerId="${firstFe.lawyerId}" (type=${typeof firstFe.lawyerId})` +
+        ` | entry.lawyerId="${(firstEntry as Record<string, unknown>)['lawyerId']}"` +
+        ` (type=${typeof (firstEntry as Record<string, unknown>)['lawyerId']})` +
+        ` | match=${firstFe.lawyerId === (firstEntry as Record<string, unknown>)['lawyerId']}`,
+      );
+      const sampleMatches = context.timeEntries.filter(
+        (e) => (e as Record<string, unknown>)['lawyerId'] === firstFe.lawyerId,
+      ).length;
+      console.log(`[F-TU-01] entries matching first fee earner: ${sampleMatches} / ${context.timeEntries.length}`);
+    } else {
+      console.log(`[F-TU-01] context: feeEarners=${context.feeEarners.length} timeEntries=${context.timeEntries.length}`);
+    }
+
     for (const feeEarner of context.feeEarners) {
       if (isSystemAccount(feeEarner)) continue;
 
