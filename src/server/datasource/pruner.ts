@@ -63,6 +63,8 @@ export const INVOICE_KEEP_FIELDS = [
   'subtotal', 'write_off', 'vat', 'total_firm_fees', 'total',
   'outstanding', 'paid', 'written_off',
   'clients', 'solicitor', 'matter',
+  // additional fields for feeEarnerRevenue calculation
+  'billing_amount', 'billable_entries', 'total_disbursements', 'credited', 'vat_percentage',
   // status kept for invoice aggregation filtering (DRAFT/CANCELED/ERROR exclusions)
   'status',
 ];

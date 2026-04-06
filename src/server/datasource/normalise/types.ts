@@ -126,6 +126,12 @@ export interface NormalisedInvoice {
   invoiceDate: string;
   dueDate: string;
   subtotal: number;
+  /** billing_amount from API — subtotal excluding write-offs/adjustments. Falls back to subtotal when absent. */
+  billingAmount: number;
+  /** Count of billable time entries on this invoice. */
+  billableEntries: number;
+  /** Revenue attributable to fee earner work: subtotal - totalFirmFees - totalDisbursements */
+  feeEarnerRevenue: number;
   totalDisbursements: number;
   totalOtherFees: number;
   totalFirmFees: number;

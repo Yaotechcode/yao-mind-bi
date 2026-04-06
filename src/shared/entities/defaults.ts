@@ -170,6 +170,11 @@ export function getDefaultFirmConfig(firmId: string, firmName: string = ''): Fir
     showLawyerPerspective: true,
     showDiscrepancies: true,
     dataPullLookbackMonths: 3,
+    billingMethodConfig: {
+      effectiveRateBase: 'chargeable_hours',
+      realisationHandling: 'invoice_over_wip',
+      calculationWindowMonths: 0,
+    },
 
     // --- Tier 2: Data & Schema ---
     entityDefinitions: {} as Partial<Record<EntityType, import('../types/index.js').EntityDefinition>>,

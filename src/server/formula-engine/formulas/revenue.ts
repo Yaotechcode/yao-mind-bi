@@ -24,6 +24,7 @@ import type {
 } from '../types.js';
 import { formatValue, summariseResults } from '../result-formatter.js';
 import { getEffectiveConfig } from '../context-builder.js';
+import { deriveMatterBillingType } from '../../datasource/enrich/invoice-enricher.js';
 
 // =============================================================================
 // Private Helpers
@@ -58,9 +59,9 @@ function numDyn(obj: object, key: string): number | null {
   return null;
 }
 
-/** True when the matter is a fixed-fee matter. */
-function isFixedFeeMatter(matter: AggregatedMatter): boolean {
-  return dynField<boolean>(matter, 'isFixedFee') === true;
+/** Returns the billing type for a matter. Uses deriveMatterBillingType for forward-compat. */
+function getMatterBillingType(matter: AggregatedMatter): 'fixed_fee' | 'hourly' | 'unknown' {
+  return deriveMatterBillingType(matter as unknown as Record<string, unknown>);
 }
 
 /** True when this fee earner is a system/internal account. */
@@ -129,13 +130,14 @@ export const realisationRate: FormulaImplementation = {
     for (const matter of context.matters) {
       const entityId = resolveMatterId(matter);
       const entityName = resolveMatterName(matter);
-      const fixedFee = isFixedFeeMatter(matter);
+      const billingType = getMatterBillingType(matter);
+      const isFixedFee = billingType === 'fixed_fee';
 
       // Variant-based inclusion rules
-      if (activeVariant === 'time_billed_only' && fixedFee) continue;
+      if (activeVariant === 'time_billed_only' && isFixedFee) continue;
 
       // adjusted_fixed_fee: fixed-fee matters auto-realise at 100%
-      if (activeVariant === 'adjusted_fixed_fee' && fixedFee) {
+      if (activeVariant === 'adjusted_fixed_fee' && isFixedFee) {
         entityResults[entityId] = {
           entityId,
           entityName,
@@ -147,7 +149,7 @@ export const realisationRate: FormulaImplementation = {
             billedValue: matter.invoicedNetBilling,
             writeOffValue: matter.wipTotalWriteOff,
             matterCount: 1,
-            isFixedFee: true,
+            billingType,
           },
         };
         continue;
@@ -234,6 +236,8 @@ export const effectiveHourlyRate: FormulaImplementation = {
     const nullReasons = new Set<string>();
     const warnings: string[] = [];
 
+    const effectiveRateBase = context.firmConfig?.billingMethodConfig?.effectiveRateBase ?? 'chargeable_hours';
+
     for (const feeEarner of context.feeEarners) {
       if (isSystemAccount(feeEarner)) continue;
 
@@ -242,13 +246,24 @@ export const effectiveHourlyRate: FormulaImplementation = {
 
       // Revenue attributed to this fee earner (pipeline-computed)
       const attributedRevenue = feeEarner.invoicedRevenue;
-      // Chargeable hours from WIP data
-      const chargeableHours = feeEarner.wipChargeableHours;
+
+      // Denominator: selected by effectiveRateBase config
+      let denomHours: number;
+      let denomLabel: string;
+      if (effectiveRateBase === 'total_hours') {
+        denomHours = (feeEarner as unknown as Record<string, unknown>)['wipTotalHours'] as number ?? 0;
+        denomLabel = 'total hours';
+      } else {
+        // 'chargeable_hours' (default) and 'billable_hours' (no separate pre-aggregation — use chargeable)
+        denomHours = feeEarner.wipChargeableHours ?? 0;
+        denomLabel = effectiveRateBase === 'billable_hours' ? 'billable hours (using chargeable)' : 'chargeable hours';
+      }
+
       // Standard charge-out rate for comparison
       const chargeOutRate = getChargeOutRate(feeEarner, entityId, context.feeEarnerOverrides);
 
-      if (chargeableHours === 0 || chargeableHours === null) {
-        const reason = 'No chargeable hours recorded';
+      if (denomHours === 0) {
+        const reason = `No ${denomLabel} recorded`;
         nullReasons.add(reason);
         entityResults[entityId] = {
           entityId,
@@ -269,7 +284,7 @@ export const effectiveHourlyRate: FormulaImplementation = {
           value: 0,
           formattedValue: formatValue(0, 'currency'),
           nullReason: null,
-          breakdown: { attributedRevenue: 0, chargeableHours },
+          breakdown: { attributedRevenue: 0, chargeableHours: denomHours },
           ...(chargeOutRate !== null
             ? { additionalValues: { chargeOutRate, rateCapture: 0 } }
             : {}),
@@ -277,12 +292,13 @@ export const effectiveHourlyRate: FormulaImplementation = {
         continue;
       }
 
-      const effectiveRate = attributedRevenue / chargeableHours;
+      const effectiveRate = attributedRevenue / denomHours;
 
       const breakdown: Record<string, unknown> = {
         attributedRevenue,
-        chargeableHours,
+        chargeableHours: denomHours,
         effectiveRate,
+        effectiveRateBase,
       };
 
       let additionalValues: Record<string, number | null> | undefined;

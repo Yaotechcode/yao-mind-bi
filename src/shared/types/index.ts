@@ -294,6 +294,26 @@ export interface FirmConfigTier1 {
   showDiscrepancies?: boolean;
   /** How many months back to pull time entries, invoices, and ledgers. Default: 6. */
   dataPullLookbackMonths?: number;
+  /** Billing method configuration for revenue formulas */
+  billingMethodConfig?: {
+    /**
+     * Denominator used for effective rate (F-RB-02) calculation.
+     * 'chargeable_hours' — hours billed to matters (default, legacy behaviour).
+     * 'billable_hours'   — all hours flagged billable (do_not_bill = false).
+     * 'total_hours'      — all recorded hours.
+     */
+    effectiveRateBase: 'chargeable_hours' | 'billable_hours' | 'total_hours';
+    /**
+     * How to handle realisation rate (F-RB-01) when billingType info is missing.
+     * 'invoice_over_wip' — invoiced / WIP value (default).
+     */
+    realisationHandling: 'invoice_over_wip';
+    /**
+     * Number of months to include in billing metrics calculations.
+     * 0 means no window filter (use all available data). Default: 0.
+     */
+    calculationWindowMonths: number;
+  };
 }
 
 export interface FirmConfigTier2 {

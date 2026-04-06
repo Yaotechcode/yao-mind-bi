@@ -99,6 +99,11 @@ export interface YaoInvoice {
   paid: number;
   written_off: number;
   vat: number;
+  billing_amount?: number;
+  billable_entries?: number;
+  total_disbursements?: number;
+  credited?: number;
+  vat_percentage?: number;
   // status kept for aggregation filtering (DRAFT/CANCELED/ERROR exclusions)
   status?: string;
   clients: Array<{ _id: string; display_name: string }>;

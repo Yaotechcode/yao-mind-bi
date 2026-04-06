@@ -40,7 +40,10 @@
       "Bash(wc:*)",
       "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({**d.get\\(''''dependencies'''',{}\\), **d.get\\(''''devDependencies'''',{}\\)}, indent=2\\)\\)\")",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); deps={**d.get\\(''''dependencies'''',{}\\), **d.get\\(''''devDependencies'''',{}\\)}; [print\\(k,v\\) for k,v in deps.items\\(\\)]\")",
-      "Bash(npx supabase:*)"
+      "Bash(npx supabase:*)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(echo \"Done:$?\")",
+      "Bash(echo \"Exit: $?\")"
     ]
   }
 }

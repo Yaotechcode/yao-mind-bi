@@ -100,6 +100,29 @@ export function enrichInvoicesWithDatePaid(
 }
 
 // =============================================================================
+// Billing type derivation
+// =============================================================================
+
+export type MatterBillingType = 'fixed_fee' | 'hourly' | 'unknown';
+
+/**
+ * Derives the billing type for a matter from its fields.
+ *
+ * Priority order:
+ *   1. Explicit `billingType` field (string) — used directly if present and recognised.
+ *   2. `isFixedFee` boolean — 'fixed_fee' when true, 'hourly' when false.
+ *   3. Falls back to 'unknown' when neither is available.
+ */
+export function deriveMatterBillingType(matter: Record<string, unknown>): MatterBillingType {
+  const explicit = matter['billingType'];
+  if (explicit === 'fixed_fee' || explicit === 'hourly') return explicit;
+  const isFixed = matter['isFixedFee'];
+  if (isFixed === true) return 'fixed_fee';
+  if (isFixed === false) return 'hourly';
+  return 'unknown';
+}
+
+// =============================================================================
 // Aggregation helpers
 // =============================================================================
 

@@ -217,7 +217,7 @@ export function aggregate(
 
     // Invoice aggregates — from invoices where responsibleLawyerId = lawyerId
     const feInvoices = (lawyerId ? invoicesByLawyerId.get(lawyerId) : undefined) ?? [];
-    const invoicedRevenue     = feInvoices.reduce((s, i) => s + num(i.subtotal), 0);
+    const invoicedRevenue     = feInvoices.reduce((s, i) => s + num(i.feeEarnerRevenue ?? (i.subtotal - i.totalFirmFees - i.totalDisbursements)), 0);
     const invoicedOutstanding = feInvoices.reduce((s, i) => s + num(i.outstanding), 0);
     const invoicedCount       = feInvoices.length;
 
@@ -365,7 +365,7 @@ export function aggregate(
   const totalWipValue         = allEntries.reduce((s, e) => s + num(e.billableValue), 0);
   const totalWriteOffValue    = allEntries.reduce((s, e) => s + num(e.writeOffValue), 0);
 
-  const totalInvoicedRevenue  = allInvoices.reduce((s, i) => s + num(i.subtotal), 0);
+  const totalInvoicedRevenue  = allInvoices.reduce((s, i) => s + num(i.feeEarnerRevenue ?? (i.subtotal - i.totalFirmFees - i.totalDisbursements)), 0);
   const totalOutstanding      = allInvoices.reduce((s, i) => s + num(i.outstanding), 0);
   const totalPaid             = allInvoices.reduce((s, i) => s + num(i.paid), 0);
 

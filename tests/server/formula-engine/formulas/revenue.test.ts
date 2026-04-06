@@ -360,7 +360,7 @@ describe('F-RB-01 realisationRate', () => {
       const r = result.entityResults['mat-003'];
       expect(r).toBeDefined();
       expect(r.value).toBe(100);
-      expect(r.breakdown?.['isFixedFee']).toBe(true);
+      expect(r.breakdown?.['billingType']).toBe('fixed_fee');
     });
 
     it('still computes time-billed matters normally', () => {

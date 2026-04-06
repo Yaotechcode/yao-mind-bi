@@ -198,6 +198,69 @@ export class CalculationOrchestrator {
     const feeEarnerOverrides = this.buildOverridesMap(overridesArr, firmConfig);
 
     // -------------------------------------------------------------------------
+    // 2b. Apply calculation window filter (if configured)
+    // -------------------------------------------------------------------------
+    const windowMonths = firmConfig.billingMethodConfig?.calculationWindowMonths ?? 0;
+    if (windowMonths > 0) {
+      const cutoff = new Date();
+      cutoff.setMonth(cutoff.getMonth() - windowMonths);
+      const cutoffIso = cutoff.toISOString().slice(0, 10); // YYYY-MM-DD
+
+      const prevInvoiceCount = enrichedData.invoices.length;
+      const prevTeCount = enrichedData.timeEntries.length;
+
+      enrichedData.invoices = enrichedData.invoices.filter((inv) => {
+        const d = (inv as unknown as Record<string, unknown>)['invoiceDate'];
+        return typeof d === 'string' && d >= cutoffIso;
+      });
+      enrichedData.timeEntries = enrichedData.timeEntries.filter((te) => {
+        const d = (te as unknown as Record<string, unknown>)['date'];
+        return typeof d === 'string' && d >= cutoffIso;
+      });
+
+      // Re-aggregate invoicedRevenue and wipChargeableHours per fee earner
+      // from the window-filtered records so that formula results respect the window.
+      const BILLABLE_STATUSES_WINDOW = new Set(['ISSUED', 'PAID', 'CREDITED']);
+      const filteredRevenueByLawyer = new Map<string, number>();
+      for (const inv of enrichedData.invoices) {
+        const r = inv as unknown as Record<string, unknown>;
+        const status = typeof r['status'] === 'string' ? r['status'] : '';
+        if (!BILLABLE_STATUSES_WINDOW.has(status)) continue;
+        const lawyerId = r['responsibleLawyerId'] != null ? String(r['responsibleLawyerId']) : null;
+        if (!lawyerId) continue;
+        const feeRev = typeof r['feeEarnerRevenue'] === 'number'
+          ? r['feeEarnerRevenue']
+          : (typeof r['subtotal'] === 'number' ? r['subtotal'] : 0)
+            - (typeof r['totalFirmFees'] === 'number' ? r['totalFirmFees'] : 0)
+            - (typeof r['totalDisbursements'] === 'number' ? r['totalDisbursements'] : 0);
+        filteredRevenueByLawyer.set(lawyerId, (filteredRevenueByLawyer.get(lawyerId) ?? 0) + feeRev);
+      }
+      const filteredHoursByLawyer = new Map<string, number>();
+      for (const te of enrichedData.timeEntries) {
+        const r = te as unknown as Record<string, unknown>;
+        if (r['isChargeable'] !== true) continue;
+        const lawyerId = r['lawyerId'] != null ? String(r['lawyerId']) : null;
+        if (!lawyerId) continue;
+        const hours = typeof r['durationHours'] === 'number' ? r['durationHours'] : 0;
+        filteredHoursByLawyer.set(lawyerId, (filteredHoursByLawyer.get(lawyerId) ?? 0) + hours);
+      }
+      enrichedData.feeEarners = enrichedData.feeEarners.map((fe) => {
+        const id = String((fe as unknown as Record<string, unknown>)['lawyerId'] ?? (fe as unknown as Record<string, unknown>)['_id'] ?? '');
+        return {
+          ...fe,
+          invoicedRevenue: filteredRevenueByLawyer.get(id) ?? 0,
+          wipChargeableHours: filteredHoursByLawyer.get(id) ?? 0,
+        };
+      });
+
+      console.log(
+        `[orchestrator] calculation window: ${windowMonths} months (cutoff ${cutoffIso}) — ` +
+        `invoices ${prevInvoiceCount}→${enrichedData.invoices.length}, ` +
+        `timeEntries ${prevTeCount}→${enrichedData.timeEntries.length}`,
+      );
+    }
+
+    // -------------------------------------------------------------------------
     // 3. Build FormulaContext
     // -------------------------------------------------------------------------
     const context = buildFormulaContext(firmId, firmConfig, feeEarnerOverrides, enrichedData);
@@ -476,14 +539,22 @@ export class CalculationOrchestrator {
       chargeableHoursByLawyer.set(lawyerId, (chargeableHoursByLawyer.get(lawyerId) ?? 0) + hours);
     }
 
-    // Pre-aggregate invoiced revenue per fee earner from invoices
+    // Pre-aggregate invoiced revenue per fee earner from invoices (billable statuses only)
+    const BILLABLE_STATUSES = new Set(['ISSUED', 'PAID', 'CREDITED']);
     const invoicedRevenueByLawyer = new Map<string, number>();
     const invoiceRecords = ((invoiceDoc?.records ?? []) as unknown[]) as Array<Record<string, unknown>>;
     for (const inv of invoiceRecords) {
+      const status = typeof inv['status'] === 'string' ? inv['status'] : '';
+      if (!BILLABLE_STATUSES.has(status)) continue;
       const lawyerId = inv['responsibleLawyerId'] != null ? String(inv['responsibleLawyerId']) : null;
       if (!lawyerId) continue;
-      const subtotal = typeof inv['subtotal'] === 'number' ? inv['subtotal'] : 0;
-      invoicedRevenueByLawyer.set(lawyerId, (invoicedRevenueByLawyer.get(lawyerId) ?? 0) + subtotal);
+      // Use feeEarnerRevenue when available; fall back to subtotal - totalFirmFees - totalDisbursements
+      const feeEarnerRevenue = typeof inv['feeEarnerRevenue'] === 'number'
+        ? inv['feeEarnerRevenue']
+        : (typeof inv['subtotal'] === 'number' ? inv['subtotal'] : 0)
+          - (typeof inv['totalFirmFees'] === 'number' ? inv['totalFirmFees'] : 0)
+          - (typeof inv['totalDisbursements'] === 'number' ? inv['totalDisbursements'] : 0);
+      invoicedRevenueByLawyer.set(lawyerId, (invoicedRevenueByLawyer.get(lawyerId) ?? 0) + feeEarnerRevenue);
     }
 
     if ((enrichedFeeEarnerRecords?.length ?? 0) > 0) {

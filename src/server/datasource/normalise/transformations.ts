@@ -176,25 +176,29 @@ export function transformTimeEntry(raw: YaoTimeEntry): NormalisedTimeEntry {
 }
 
 export function transformInvoice(raw: YaoInvoice): NormalisedInvoice {
+  const totalDisbursements = raw.total_disbursements ?? 0;
+  const totalFirmFees = raw.total_firm_fees ?? 0;
+  const subtotal = raw.subtotal ?? 0;
   return {
     _id: raw._id,
     invoiceNumber: raw.invoice_number,
     invoiceDate: raw.invoice_date,
     dueDate: raw.due_date,
-    subtotal: raw.subtotal,
-    // total_disbursements, total_other_fees, credited, vat_percentage, type, narrative,
-    // reference, integration_id, created_at, updated_at not in INVOICE_KEEP_FIELDS
-    totalDisbursements: 0,
+    subtotal,
+    billingAmount: raw.billing_amount ?? subtotal,
+    billableEntries: raw.billable_entries ?? 0,
+    feeEarnerRevenue: subtotal - totalFirmFees - totalDisbursements,
+    totalDisbursements,
     totalOtherFees: 0,
-    totalFirmFees: raw.total_firm_fees,
+    totalFirmFees,
     writeOff: raw.write_off,
     total: raw.total,
     outstanding: raw.outstanding,
     paid: raw.paid,
-    credited: 0,
+    credited: raw.credited ?? 0,
     writtenOff: raw.written_off,
     vat: raw.vat,
-    vatPercentage: 0,
+    vatPercentage: raw.vat_percentage ?? 0,
     status: raw.status ?? '',
     type: '',
     responsibleLawyerId: raw.solicitor?._id ?? null,
