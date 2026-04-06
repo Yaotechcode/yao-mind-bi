@@ -479,7 +479,7 @@ const BUILT_IN_FORMULAS: BuiltInFormulaDefinition[] = [
       'A leading indicator of pricing, scope, and client-relation problems.',
     category: 'leakage',
     formulaType: 'built_in',
-    entityType: EntityType.FEE_EARNER,
+    entityType: EntityType.MATTER,
     resultType: 'percentage',
     definition: {
       approach:

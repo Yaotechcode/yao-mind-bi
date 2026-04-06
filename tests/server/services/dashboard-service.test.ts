@@ -218,8 +218,10 @@ describe('getFeeEarnerPerformanceData', () => {
   });
 
   it('generates alert when recordingGapDays > 5', async () => {
-    // recordingGapDays now comes from F-TU-02 (Recording Consistency formula)
+    // recordingGapDays now comes from F-TU-02 (Recording Consistency formula).
+    // F-TU-01 row is required so l-1 passes the authoritative attorney ID filter.
     vi.mocked(kpiSnapshotService.getKpiSnapshots).mockResolvedValue([
+      makeSnapshot({ entity_id: 'l-1', entity_name: 'Alice', kpi_key: 'F-TU-01' }),
       makeSnapshot({ entity_id: 'l-1', entity_name: 'Alice', kpi_key: 'F-TU-02', kpi_value: 10 }),
     ]);
     const result = await getFeeEarnerPerformanceData(FIRM_ID);

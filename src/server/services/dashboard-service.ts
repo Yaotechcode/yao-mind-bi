@@ -424,8 +424,17 @@ export async function getFeeEarnerPerformanceData(
 
   const weeklyTarget = firmConfig.weeklyTargetHours ?? 37.5;
 
-  // Group kpi_snapshot rows by entity_id
-  const byEntity = groupSnapshotsByEntity(feeEarnerSnaps);
+  // Filter to only entity_ids that appear in F-TU-01 — these are the authoritative
+  // attorney IDs. Without this filter, F-WL-02 matter-level rows (stored with
+  // entity_type='feeEarner' due to legacy mapping) pollute the grouping.
+  const feeEarnerEntityIds = new Set(
+    feeEarnerSnaps
+      .filter((s) => s.kpi_key === 'F-TU-01')
+      .map((s) => s.entity_id),
+  );
+  const byEntity = groupSnapshotsByEntity(
+    feeEarnerSnaps.filter((s) => feeEarnerEntityIds.has(s.entity_id)),
+  );
 
   // Build row list from kpi_snapshots — one row per entity_id.
   // Name: prefer F-TU-01 entity_name (most reliably set from attorney fullName),
