@@ -39,6 +39,12 @@ export interface EnrichedFeeEarner extends NormalisedAttorney {
   firmLeadPercent: number | null;
   /** true if CSV data was found and merged for this attorney */
   csvDataPresent: boolean;
+  /** Most-frequent department across responsible matters (populated by PullOrchestrator after matters are available) */
+  departmentName: string | null;
+  /** Total chargeable hours from time entries (populated by PullOrchestrator after time entries are available) */
+  wipChargeableHours: number;
+  /** Total hours from all time entries (populated by PullOrchestrator after time entries are available) */
+  wipTotalHours: number;
 }
 
 // =============================================================================
@@ -233,6 +239,9 @@ export function mergeFeeEarnerData(
       feeSharePercent: null,
       firmLeadPercent: null,
       csvDataPresent: false,
+      departmentName: null,
+      wipChargeableHours: 0,
+      wipTotalHours: 0,
     };
   }
 
@@ -255,6 +264,9 @@ export function mergeFeeEarnerData(
     feeSharePercent: numOrNull(csvRecord['feeSharePercent']),
     firmLeadPercent: numOrNull(csvRecord['firmLeadPercent']),
     csvDataPresent: true,
+    departmentName: null,
+    wipChargeableHours: 0,
+    wipTotalHours: 0,
   };
 }
 

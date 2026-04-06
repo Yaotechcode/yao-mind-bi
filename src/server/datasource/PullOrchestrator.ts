@@ -219,15 +219,18 @@ export class PullOrchestrator {
         warnings.push(`Fee earner CSV merge skipped: ${msg}`);
       }
 
-      await Promise.all([
-        storeEnrichedEntities(firmId, 'feeEarner', enrichedFeeEarners as unknown as Record<string, unknown>[], [], undefined),
-        storeEnrichedEntities(firmId, 'matter',    safeMatters as unknown as Record<string, unknown>[], [], undefined),
-      ]);
+      // Store matters now; feeEarner store is deferred until after time entries
+      // are processed so wipChargeableHours, wipTotalHours, and departmentName
+      // can be computed and attached in one atomic write.
+      await storeEnrichedEntities(firmId, 'matter', safeMatters as unknown as Record<string, unknown>[], [], undefined);
 
       // --- 6a-2: Time entries — fetch, normalise, enrich (WIP), store, release
-      // rawTimeEntries and safeTimeEntries released at end of block
+      // rawTimeEntries and safeTimeEntries released at end of block.
+      // WIP aggregation maps declared here so they survive beyond the block scope.
       // -----------------------------------------------------------------------
       await updatePullStage(firmId, 'Fetching time entries');
+      const chargeableHoursByLawyer = new Map<string, number>();
+      const totalHoursByLawyer      = new Map<string, number>();
       {
         const rawTimeEntries  = await adapter.fetchTimeEntries(dateFrom);
         stats.timeEntries     = rawTimeEntries.length;
@@ -243,12 +246,64 @@ export class PullOrchestrator {
             maps,
           ).timeEntries,
         );
+
+        // Aggregate chargeable and total hours per attorney while safeTimeEntries is in scope
+        for (const te of safeTimeEntries) {
+          const teRec = te as unknown as Record<string, unknown>;
+          const lid   = teRec['lawyerId'] != null ? String(teRec['lawyerId']) : null;
+          if (!lid) continue;
+          const hours = typeof teRec['durationHours'] === 'number' ? teRec['durationHours'] : 0;
+          totalHoursByLawyer.set(lid, (totalHoursByLawyer.get(lid) ?? 0) + hours);
+          if (teRec['isChargeable'] !== false) {
+            chargeableHoursByLawyer.set(lid, (chargeableHoursByLawyer.get(lid) ?? 0) + hours);
+          }
+        }
+
         const wipEnrichment = buildWipEnrichment(safeTimeEntries);
         await Promise.all([
           storeEnrichedEntities(firmId, 'timeEntry', safeTimeEntries as unknown as Record<string, unknown>[], [], undefined),
           storeEnrichedEntities(firmId, 'wip',       [wipEnrichment as unknown as Record<string, unknown>],   [], undefined),
         ]);
       }
+
+      // Now store fee earner records enriched with department + WIP hours.
+      // safeMatters (department) and chargeableHoursByLawyer/totalHoursByLawyer are all in scope.
+      {
+        const deptCountsByLawyer = new Map<string, Map<string, number>>();
+        for (const m of safeMatters as unknown as Array<Record<string, unknown>>) {
+          const lid  = m['responsibleLawyerId'] != null ? String(m['responsibleLawyerId']) : null;
+          const dept = m['departmentName']       != null ? String(m['departmentName'])       : null;
+          if (!lid || !dept) continue;
+          const counts = deptCountsByLawyer.get(lid) ?? new Map<string, number>();
+          counts.set(dept, (counts.get(dept) ?? 0) + 1);
+          deptCountsByLawyer.set(lid, counts);
+        }
+
+        const enrichedWithAggregates = (enrichedFeeEarners as unknown as Array<Record<string, unknown>>).map((fe) => {
+          const id        = fe['_id'] != null ? String(fe['_id']) : '';
+          const deptCounts = deptCountsByLawyer.get(id);
+          let topDept: string | null = null;
+          if (deptCounts) {
+            let maxCount = 0;
+            for (const [dept, count] of deptCounts) {
+              if (count > maxCount) { maxCount = count; topDept = dept; }
+            }
+          }
+          return {
+            ...fe,
+            departmentName:     topDept,
+            wipChargeableHours: chargeableHoursByLawyer.get(id) ?? 0,
+            wipTotalHours:      totalHoursByLawyer.get(id)      ?? 0,
+          };
+        });
+
+        await storeEnrichedEntities(firmId, 'feeEarner', enrichedWithAggregates, [], undefined);
+        console.log(
+          `[PullOrchestrator] stored ${enrichedWithAggregates.length} fee earners with ` +
+          `departmentName + WIP hours (${chargeableHoursByLawyer.size} attorneys have chargeable hours)`,
+        );
+      }
+
       await updatePullStage(firmId, 'Fetching time entries', {
         matters:     stats.matters,
         timeEntries: stats.timeEntries,
