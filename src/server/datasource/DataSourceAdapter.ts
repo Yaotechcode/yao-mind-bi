@@ -537,7 +537,15 @@ export class DataSourceAdapter {
    */
   async fetchAttorneys(): Promise<YaoAttorney[]> {
     const raw = await this.request<Record<string, unknown>[]>('GET', '/attorneys');
-    return pruneArray(raw, ATTORNEY_KEEP_FIELDS) as unknown as YaoAttorney[];
+    const pruned = pruneArray(raw, ATTORNEY_KEEP_FIELDS) as unknown as YaoAttorney[];
+    const active = pruned.filter(
+      (a) => (a.status as string)?.toLowerCase() === 'active'
+    );
+    console.log(
+      `[fetchAttorneys] total=${pruned.length} active=${active.length} ` +
+      `disabled=${pruned.length - active.length}`
+    );
+    return active;
   }
 
   /**

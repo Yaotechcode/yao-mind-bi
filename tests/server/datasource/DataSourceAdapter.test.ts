@@ -398,3 +398,27 @@ describe('error handling', () => {
     }
   });
 });
+
+// =============================================================================
+// fetchAttorneys()
+// =============================================================================
+
+describe('fetchAttorneys()', () => {
+  async function authenticatedAdapter(): Promise<DataSourceAdapter> {
+    mockFetch.mockResolvedValueOnce(makeResponse({ access_token: 'tok' }));
+    const adapter = new DataSourceAdapter('firm-1');
+    await adapter.authenticate();
+    return adapter;
+  }
+
+  it('filters out disabled attorneys', async () => {
+    const adapter = await authenticatedAdapter();
+    mockFetch.mockResolvedValueOnce(makeResponse([
+      { _id: '1', name: 'Active', surname: 'User', status: 'ACTIVE' },
+      { _id: '2', name: 'Disabled', surname: 'User', status: 'disabled' },
+    ]));
+    const result = await adapter.fetchAttorneys();
+    expect(result).toHaveLength(1);
+    expect(result[0]._id).toBe('1');
+  });
+});
