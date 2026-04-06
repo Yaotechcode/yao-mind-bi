@@ -173,7 +173,7 @@ export function getDefaultFirmConfig(firmId: string, firmName: string = ''): Fir
     billingMethodConfig: {
       effectiveRateBase: 'chargeable_hours',
       realisationHandling: 'invoice_over_wip',
-      calculationWindowMonths: 0,
+      calculationWindowMonths: 12,
     },
 
     // --- Tier 2: Data & Schema ---

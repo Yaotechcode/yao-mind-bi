@@ -245,13 +245,20 @@ export class CalculationOrchestrator {
         if (windowActiveIds.size > 0 && !windowActiveIds.has(lawyerId)) continue; // skip disabled attorneys
         filteredRevenueByLawyer.set(lawyerId, (filteredRevenueByLawyer.get(lawyerId) ?? 0) + feeRev);
       }
+      // Capture pre-window chargeable hours for logging
+      const prevChargeableHours = enrichedData.feeEarners.reduce(
+        (s, fe) => s + (((fe as unknown as Record<string, unknown>)['wipChargeableHours'] as number) ?? 0), 0,
+      );
+
       const filteredHoursByLawyer = new Map<string, number>();
+      const filteredTotalHoursByLawyer = new Map<string, number>();
       for (const te of enrichedData.timeEntries) {
         const r = te as unknown as Record<string, unknown>;
-        if (r['isChargeable'] !== true) continue;
         const lawyerId = r['lawyerId'] != null ? String(r['lawyerId']) : null;
         if (!lawyerId) continue;
         const hours = typeof r['durationHours'] === 'number' ? r['durationHours'] : 0;
+        filteredTotalHoursByLawyer.set(lawyerId, (filteredTotalHoursByLawyer.get(lawyerId) ?? 0) + hours);
+        if (r['isChargeable'] !== true) continue;
         filteredHoursByLawyer.set(lawyerId, (filteredHoursByLawyer.get(lawyerId) ?? 0) + hours);
       }
       enrichedData.feeEarners = enrichedData.feeEarners.map((fe) => {
@@ -260,6 +267,7 @@ export class CalculationOrchestrator {
           ...fe,
           invoicedRevenue: filteredRevenueByLawyer.get(id) ?? 0,
           wipChargeableHours: filteredHoursByLawyer.get(id) ?? 0,
+          wipTotalHours: filteredTotalHoursByLawyer.get(id) ?? 0,
         };
       });
       // Patch firm-level totalInvoicedRevenue to reflect the window-filtered sum
@@ -267,11 +275,18 @@ export class CalculationOrchestrator {
         enrichedData.firm = { ...enrichedData.firm, totalInvoicedRevenue: windowFirmRevenue };
       }
 
+      const newChargeableHours = enrichedData.feeEarners.reduce(
+        (s, fe) => s + (((fe as unknown as Record<string, unknown>)['wipChargeableHours'] as number) ?? 0), 0,
+      );
       console.log(
         `[orchestrator] calculation window: ${windowMonths} months (cutoff ${cutoffIso}) — ` +
         `invoices ${prevInvoiceCount}→${enrichedData.invoices.length}, ` +
         `timeEntries ${prevTeCount}→${enrichedData.timeEntries.length}, ` +
         `firmRevenue: £${windowFirmRevenue.toFixed(0)}`,
+      );
+      console.log(
+        `[orchestrator] window-adjusted — chargeableHours: ${newChargeableHours.toFixed(1)} (was ${prevChargeableHours.toFixed(1)} before window), ` +
+        `invoicedRevenue: £${windowFirmRevenue.toFixed(0)} (window-filtered)`,
       );
     }
 
