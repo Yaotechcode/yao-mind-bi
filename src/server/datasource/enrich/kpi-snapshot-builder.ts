@@ -73,8 +73,21 @@ export function buildSnapshotsFromKpiResults(
   for (const [formulaId, result] of Object.entries(formulaResults)) {
     const entityType = entityTypeMap.get(formulaId) ?? 'firm';
     const formulaRagMap = ragAssignments[formulaId] ?? {};
+    const entityResults = result.entityResults ?? {};
 
-    for (const [entityId, entityResult] of Object.entries(result.entityResults)) {
+    if (formulaId === 'F-TU-01') {
+      const entityEntries = Object.entries(entityResults).slice(0, 3);
+      console.log('[snapshot-builder] F-TU-01 entityResults sample:',
+        JSON.stringify(entityEntries.map(([id, r]) => ({
+          entityId: id,
+          entityName: (r as Record<string, unknown>)['entityName'],
+          value: (r as Record<string, unknown>)['value'],
+          nullReason: (r as Record<string, unknown>)['nullReason'],
+        })), null, 2));
+      console.log(`[snapshot-builder] F-TU-01 total entityResults: ${Object.keys(entityResults).length}`);
+    }
+
+    for (const [entityId, entityResult] of Object.entries(entityResults)) {
       const ragAssignment = formulaRagMap[entityId];
       const ragStatus = (ragAssignment?.status ?? null) as KpiSnapshotRow['rag_status'];
 
