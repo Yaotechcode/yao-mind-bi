@@ -671,8 +671,9 @@ export class DataSourceAdapter {
 
   /**
    * Fetches time entries via page-based pagination (POST /time-entries/search).
-   * Excludes CONSOLIDATED and CONSOLIDATION_TARGET records — only ACTIVE entries
-   * are relevant for KPI calculation. Status is filtered on raw records before pruning.
+   * Excludes CONSOLIDATED, CONSOLIDATION_TARGET, and DELETED records.
+   * Entries with no status field are included — the API omits status on valid entries.
+   * Status is filtered on raw records before pruning (status is not in the pruned shape).
    * @param fromDate  Optional ISO date string ('YYYY-MM-DD') to limit results to records on/after this date.
    */
   async fetchTimeEntries(fromDate?: string): Promise<YaoTimeEntry[]> {
@@ -685,11 +686,20 @@ export class DataSourceAdapter {
       50,
       3, // batchSize=3: reduces concurrent load on later pages (400+)
     );
-    // Filter for ACTIVE before pruning (status field is not in the pruned shape)
-    const active = raw.filter(e => e['status'] === 'ACTIVE');
+    // Exclude only explicitly bad statuses. Entries with no status are valid.
+    const EXCLUDED_STATUSES = new Set(['CONSOLIDATED', 'CONSOLIDATION_TARGET', 'DELETED']);
+    const included = raw.filter(e => {
+      const status = e['status'];
+      if (status === undefined || status === null || status === '') return true;
+      return !EXCLUDED_STATUSES.has(String(status));
+    });
+    const excluded = raw.length - included.length;
     const pageCount = Math.ceil(raw.length / 50);
-    console.log(`[fetchTimeEntries] fetched ${raw.length} total entries across ~${pageCount} pages (${active.length} ACTIVE)`);
-    return pruneArray(active, TIME_ENTRY_KEEP_FIELDS)
+    console.log(
+      `[fetchTimeEntries] fetched ${raw.length} total entries across ~${pageCount} pages ` +
+      `(${included.length} included, ${excluded} excluded as CONSOLIDATED/DELETED)`,
+    );
+    return pruneArray(included, TIME_ENTRY_KEEP_FIELDS)
       .map(e => stripNestedSensitiveFields(e)) as unknown as YaoTimeEntry[];
   }
 
