@@ -43,7 +43,8 @@
       "Bash(npx supabase:*)",
       "Bash(echo \"EXIT:$?\")",
       "Bash(echo \"Done:$?\")",
-      "Bash(echo \"Exit: $?\")"
+      "Bash(echo \"Exit: $?\")",
+      "Bash(GIT_EDITOR=true git rebase:*)"
     ]
   }
 }

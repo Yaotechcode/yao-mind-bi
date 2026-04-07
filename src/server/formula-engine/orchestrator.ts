@@ -245,12 +245,7 @@ export class CalculationOrchestrator {
         if (windowActiveIds.size > 0 && !windowActiveIds.has(lawyerId)) continue; // skip disabled attorneys
         filteredRevenueByLawyer.set(lawyerId, (filteredRevenueByLawyer.get(lawyerId) ?? 0) + feeRev);
       }
-      // Capture pre-window chargeable hours for logging
-      const prevChargeableHours = enrichedData.feeEarners.reduce(
-        (s, fe) => s + (((fe as unknown as Record<string, unknown>)['wipChargeableHours'] as number) ?? 0), 0,
-      );
-
-      const filteredHoursByLawyer = new Map<string, number>();
+      const filteredChargeableHoursByLawyer = new Map<string, number>();
       const filteredTotalHoursByLawyer = new Map<string, number>();
       for (const te of enrichedData.timeEntries) {
         const r = te as unknown as Record<string, unknown>;
@@ -258,26 +253,34 @@ export class CalculationOrchestrator {
         if (!lawyerId) continue;
         const hours = typeof r['durationHours'] === 'number' ? r['durationHours'] : 0;
         filteredTotalHoursByLawyer.set(lawyerId, (filteredTotalHoursByLawyer.get(lawyerId) ?? 0) + hours);
-        if (r['isChargeable'] !== true) continue;
-        filteredHoursByLawyer.set(lawyerId, (filteredHoursByLawyer.get(lawyerId) ?? 0) + hours);
+        if (r['isChargeable'] !== false) {
+          filteredChargeableHoursByLawyer.set(lawyerId, (filteredChargeableHoursByLawyer.get(lawyerId) ?? 0) + hours);
+        }
       }
+      const prevTotalChargeableHours = enrichedData.feeEarners.reduce(
+        (s, fe) => s + (typeof (fe as unknown as Record<string, unknown>)['wipChargeableHours'] === 'number'
+          ? (fe as unknown as Record<string, unknown>)['wipChargeableHours'] as number : 0),
+        0,
+      );
       enrichedData.feeEarners = enrichedData.feeEarners.map((fe) => {
         const id = String((fe as unknown as Record<string, unknown>)['lawyerId'] ?? (fe as unknown as Record<string, unknown>)['_id'] ?? '');
         return {
           ...fe,
           invoicedRevenue: filteredRevenueByLawyer.get(id) ?? 0,
-          wipChargeableHours: filteredHoursByLawyer.get(id) ?? 0,
+          wipChargeableHours: filteredChargeableHoursByLawyer.get(id) ?? 0,
           wipTotalHours: filteredTotalHoursByLawyer.get(id) ?? 0,
         };
       });
+      const windowTotalChargeableHours = enrichedData.feeEarners.reduce(
+        (s, fe) => s + (typeof (fe as unknown as Record<string, unknown>)['wipChargeableHours'] === 'number'
+          ? (fe as unknown as Record<string, unknown>)['wipChargeableHours'] as number : 0),
+        0,
+      );
       // Patch firm-level totalInvoicedRevenue to reflect the window-filtered sum
       if (windowFirmRevenue > 0) {
         enrichedData.firm = { ...enrichedData.firm, totalInvoicedRevenue: windowFirmRevenue };
       }
 
-      const newChargeableHours = enrichedData.feeEarners.reduce(
-        (s, fe) => s + (((fe as unknown as Record<string, unknown>)['wipChargeableHours'] as number) ?? 0), 0,
-      );
       console.log(
         `[orchestrator] calculation window: ${windowMonths} months (cutoff ${cutoffIso}) — ` +
         `invoices ${prevInvoiceCount}→${enrichedData.invoices.length}, ` +
@@ -285,7 +288,8 @@ export class CalculationOrchestrator {
         `firmRevenue: £${windowFirmRevenue.toFixed(0)}`,
       );
       console.log(
-        `[orchestrator] window-adjusted — chargeableHours: ${newChargeableHours.toFixed(1)} (was ${prevChargeableHours.toFixed(1)} before window), ` +
+        `[orchestrator] window-adjusted — chargeableHours: ${windowTotalChargeableHours.toFixed(1)} ` +
+        `(was ${prevTotalChargeableHours.toFixed(1)} before window), ` +
         `invoicedRevenue: £${windowFirmRevenue.toFixed(0)} (window-filtered)`,
       );
     }
