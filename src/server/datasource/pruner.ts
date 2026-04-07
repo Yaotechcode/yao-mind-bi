@@ -54,7 +54,7 @@ export const MATTER_KEEP_FIELDS = [
 ];
 
 export const TIME_ENTRY_KEEP_FIELDS = [
-  '_id', 'do_not_bill', 'billable', 'write_off', 'duration_minutes',
+  '_id', 'do_not_bill', 'billable', 'write_off', 'duration_minutes', 'units',
   'matter', 'assignee', 'activity', 'work_type', 'date', 'department',
 ];
 

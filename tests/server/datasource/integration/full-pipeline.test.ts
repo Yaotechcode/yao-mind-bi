@@ -810,10 +810,10 @@ describe('Test 8: datePaid derived from invoicePayments ledger', () => {
 // =============================================================================
 
 describe('Test 9: WIP aggregation from normalised time entries', () => {
-  it('computes correct totalHours from duration_minutes', () => {
+  it('computes correct durationHours from billing units (units×6/60)', () => {
     const normEntry = transformTimeEntry(RAW_TIME_ENTRY);
-    // 30 min → 0.5 hours
-    expect(normEntry.durationHours).toBe(0.5);
+    // units=2 → 2×6/60 = 0.2 hours billed
+    expect(normEntry.durationHours).toBe(0.2);
   });
 
   it('picks up activity title from activity.title field', () => {
@@ -827,8 +827,8 @@ describe('Test 9: WIP aggregation from normalised time entries', () => {
 
     expect(wip.totalStats.totalBillable).toBe(125);
     expect(wip.totalStats.totalWriteOff).toBe(25);
-    expect(wip.totalStats.totalHours).toBe(0.5);
-    expect(wip.totalStats.chargeableHours).toBe(0.5); // do_not_bill=false, billable>0
+    expect(wip.totalStats.totalHours).toBe(0.2);
+    expect(wip.totalStats.chargeableHours).toBe(0.2); // do_not_bill=false, billable>0
     expect(wip.totalStats.entryCount).toBe(1);
   });
 
@@ -839,7 +839,7 @@ describe('Test 9: WIP aggregation from normalised time entries', () => {
     const matterWip = wip.byMatter.get('matter-001');
     expect(matterWip).toBeDefined();
     expect(matterWip!.totalBillable).toBe(125);
-    expect(matterWip!.totalHours).toBe(0.5);
+    expect(matterWip!.totalHours).toBe(0.2);
   });
 
   it('aggregates by fee earner correctly', () => {
@@ -857,7 +857,7 @@ describe('Test 9: WIP aggregation from normalised time entries', () => {
 
     const telephoneBreakdown = wip.totalStats.activityBreakdown['Telephone'];
     expect(telephoneBreakdown).toBeDefined();
-    expect(telephoneBreakdown.hours).toBe(0.5);
+    expect(telephoneBreakdown.hours).toBe(0.2);
     expect(telephoneBreakdown.value).toBe(125);
   });
 

@@ -149,12 +149,14 @@ export function transformTimeEntry(raw: YaoTimeEntry): NormalisedTimeEntry {
     // not in TIME_ENTRY_KEEP_FIELDS — default to empty/zero/null
     description: '',
     activityType: raw.activity?.title ?? raw.work_type ?? null,
-    durationHours: raw.duration_minutes / 60,
+    durationHours: raw.units != null && raw.units > 0
+      ? (raw.units * 6) / 60
+      : raw.duration_minutes / 60,
     isChargeable: !raw.do_not_bill && raw.billable > 0,
     doNotBill: raw.do_not_bill,
     rate: 0,
     clientRate: null,
-    units: 0,
+    units: raw.units ?? 0,
     billable: raw.billable,
     writeOff: raw.write_off,
     recordedValue: raw.billable + raw.write_off,
