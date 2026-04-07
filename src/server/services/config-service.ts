@@ -145,9 +145,18 @@ async function readRawConfig(firmId: string): Promise<FirmConfig> {
     throw new Error(`No config found for firm ${firmId}. Run seedFirm first.`);
   }
 
-  // Config is stored as a single JSONB column named 'config'.
   const row = data as Record<string, unknown>;
-  return ((row['config'] as FirmConfig) ?? {}) as FirmConfig;
+  // Config is stored as a single JSONB column named 'config'.
+  const config = ((row['config'] as FirmConfig) ?? {}) as Record<string, unknown>;
+
+  // Overlay fields that are persisted in dedicated JSONB columns.
+  // These take precedence over any value in the config blob.
+  const wtd = (row['working_time_defaults'] as Record<string, unknown>) ?? {};
+  if (typeof wtd['dataPullLookbackMonths'] === 'number') {
+    config['dataPullLookbackMonths'] = wtd['dataPullLookbackMonths'];
+  }
+
+  return config as FirmConfig;
 }
 
 /** Persists an updated config to DB. */
@@ -268,6 +277,21 @@ export async function updateFirmConfig(
   }
 
   await writeConfig(firmId, updated);
+
+  // Also persist fields that live in dedicated JSONB columns so they survive
+  // even when the config blob is absent.
+  if (path === 'dataPullLookbackMonths' && typeof value === 'number') {
+    const { data: wtRow } = await db.server
+      .from('firm_config')
+      .select('working_time_defaults')
+      .eq('firm_id', firmId)
+      .single();
+    const currentWtd = ((wtRow as Record<string, unknown> | null)?.['working_time_defaults'] as Record<string, unknown>) ?? {};
+    await db.server
+      .from('firm_config')
+      .update({ working_time_defaults: { ...currentWtd, dataPullLookbackMonths: value } })
+      .eq('firm_id', firmId);
+  }
 
   await writeAuditEntry(
     firmId,

@@ -169,7 +169,7 @@ export function getDefaultFirmConfig(firmId: string, firmName: string = ''): Fir
     revenueAttribution: 'responsible_lawyer',
     showLawyerPerspective: true,
     showDiscrepancies: true,
-    dataPullLookbackMonths: 3,
+    dataPullLookbackMonths: 13,
     billingMethodConfig: {
       effectiveRateBase: 'chargeable_hours',
       realisationHandling: 'invoice_over_wip',
