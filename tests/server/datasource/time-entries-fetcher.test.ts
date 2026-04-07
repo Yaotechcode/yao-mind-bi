@@ -97,7 +97,7 @@ describe('fetchTimeEntries()', () => {
 
     const result = await adapter.fetchTimeEntries();
     expect(result).toHaveLength(51);
-    expect(mockFetch).toHaveBeenCalledTimes(7); // 1 auth + 6 pages (1 Phase A + 5 Phase B)
+    expect(mockFetch).toHaveBeenCalledTimes(5); // 1 auth + 4 pages (1 Phase A + 3 Phase B batch)
   });
 
   it('stops after single page when result.length < size', async () => {

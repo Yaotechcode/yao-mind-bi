@@ -113,7 +113,7 @@ export class DataSourceAdapter {
   private token: string | null = null;
   private readonly baseUrl: string;
   private readonly _warnings: string[] = [];
-  private readonly REQUEST_TIMEOUT_MS = 30_000;
+  private readonly REQUEST_TIMEOUT_MS = 45_000;
 
   constructor(firmId: string) {
     this.firmId = firmId;
@@ -451,10 +451,31 @@ export class DataSourceAdapter {
       );
 
       let done = false;
-      for (const rows of results) {
-        if (rows === null) { done = true; break; }
-        all.push(...rows);
-        if (rows.length < limit) { done = true; break; }
+      for (let i = 0; i < results.length; i++) {
+        const rows = results[i];
+        if (rows === null) {
+          // Retry this page once sequentially before stopping
+          const timedOutPage = pageNumbers[i];
+          console.log(`[DataSourceAdapter] retrying ${path} page ${timedOutPage} sequentially after timeout`);
+          try {
+            const retryResponse = await this.request<Record<string, unknown>>('GET', path, {
+              params: { ...params, page: String(timedOutPage), limit: String(limit) },
+            });
+            const retryRows = (retryResponse[resultKey] ?? []) as T[];
+            all.push(...retryRows);
+            if (retryRows.length < limit) { done = true; break; }
+            // Full page on retry — continue processing remaining batch results
+          } catch (retryErr) {
+            const msg = `${path} page ${timedOutPage} failed on retry — stopping pagination`;
+            console.warn(`[DataSourceAdapter] WARNING: ${msg}`);
+            this._warnings.push(msg);
+            done = true;
+            break;
+          }
+        } else {
+          all.push(...rows);
+          if (rows.length < limit) { done = true; break; }
+        }
       }
       if (done) break;
       nextPage += batchSize;
@@ -515,10 +536,31 @@ export class DataSourceAdapter {
       );
 
       let done = false;
-      for (const rows of results) {
-        if (rows === null) { done = true; break; }
-        all.push(...rows);
-        if (rows.length < size) { done = true; break; }
+      for (let i = 0; i < results.length; i++) {
+        const rows = results[i];
+        if (rows === null) {
+          // Retry this page once sequentially before stopping
+          const timedOutPage = pageNumbers[i];
+          console.log(`[DataSourceAdapter] retrying ${path} page ${timedOutPage} sequentially after timeout`);
+          try {
+            const retryResponse = await this.request<unknown>('POST', path, {
+              body: { ...body, size, page: timedOutPage },
+            });
+            const retryRows = extractRows(retryResponse);
+            all.push(...retryRows);
+            if (retryRows.length < size) { done = true; break; }
+            // Full page on retry — continue processing remaining batch results
+          } catch (retryErr) {
+            const msg = `${path} page ${timedOutPage} failed on retry — stopping pagination`;
+            console.warn(`[DataSourceAdapter] WARNING: ${msg}`);
+            this._warnings.push(msg);
+            done = true;
+            break;
+          }
+        } else {
+          all.push(...rows);
+          if (rows.length < size) { done = true; break; }
+        }
       }
       if (done) break;
       nextPage += batchSize;
@@ -641,9 +683,12 @@ export class DataSourceAdapter {
       body,
       'result',
       50,
+      3, // batchSize=3: reduces concurrent load on later pages (400+)
     );
     // Filter for ACTIVE before pruning (status field is not in the pruned shape)
     const active = raw.filter(e => e['status'] === 'ACTIVE');
+    const pageCount = Math.ceil(raw.length / 50);
+    console.log(`[fetchTimeEntries] fetched ${raw.length} total entries across ~${pageCount} pages (${active.length} ACTIVE)`);
     return pruneArray(active, TIME_ENTRY_KEEP_FIELDS)
       .map(e => stripNestedSensitiveFields(e)) as unknown as YaoTimeEntry[];
   }

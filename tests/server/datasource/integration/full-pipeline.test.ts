@@ -632,8 +632,8 @@ describe('Test 4: time entry page-based pagination', () => {
       ([url]: [string]) => new URL(url).pathname === '/time-entries/search',
     );
 
-    // Phase A: 1 call (page 1). Phase B: 5 concurrent calls (pages 2-6).
-    expect(teCalls).toHaveLength(6);
+    // Phase A: 1 call (page 1). Phase B: 3 concurrent calls (pages 2-4, batchSize=3).
+    expect(teCalls).toHaveLength(4);
     const secondBody = JSON.parse(teCalls[1][1].body as string) as Record<string, unknown>;
     expect(secondBody['page']).toBe(2);
   });
