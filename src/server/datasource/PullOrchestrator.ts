@@ -161,10 +161,11 @@ export class PullOrchestrator {
       await adapter.authenticate();
 
       const firmConfig = await getFirmConfig(firmId);
-      const lookbackMonths = firmConfig?.dataPullLookbackMonths ?? 6;
+      const lookbackMonths = firmConfig?.dataPullLookbackMonths ?? 13;
       const fromDateObj = new Date();
       fromDateObj.setMonth(fromDateObj.getMonth() - lookbackMonths);
       const dateFrom = fromDateObj.toISOString().split('T')[0];
+      console.log(`[PullOrchestrator] starting pull for firm ${firmId} — lookback: ${lookbackMonths} months (cutoff: ${dateFrom})`);
 
       // -----------------------------------------------------------------------
       // Step 4: Fetch lookup tables
