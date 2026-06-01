@@ -113,14 +113,17 @@ Step 1 — Lookup tables (fetch once, build in-memory maps):
 - `GET /targets/{YYYY-MM}` → optional firm-wide targets (`user_targets[].work_hours_per_day`, `non_chargeable_ratio`, `workday_rules.excluded_dates`). Returns null on 404 — non-fatal fallback for fee earners with no CSV upload.
 
 Step 2 — Transactional data (paginated loops):
-- `GET /matters?page=N&limit=100` → `{ rows[], limit }` — increment page until `rows.length < limit`
+
+Lookback window default: **6 months** (code default). Stored as `dataPullLookbackMonths` in `firm_config.working_time_defaults`; the stored value takes precedence if set. Applies to time entries, invoices, and ledgers — matters are not date-filtered (see below).
+
+- `GET /matters?status=IN_PROGRESS,ON_HOLD,EXCHANGED,QUOTE,NOT_PROCEEDING&page=N&limit=100` → `{ rows[], limit }` — active matters only (MVP scope). Excludes ARCHIVED, COMPLETED, CLOSED, DESTROYED, LOCKED, DRAFT. No date filter on matters — all active matters are pulled regardless of age. **Trade-off:** time entries, invoices, and ledger records for recently-completed matters will still be fetched (by date range) but will carry `hasMatchedMatter = false` — accepted for MVP.
 - `POST /time-entries/search { size:100, page:N, start: dateFrom }` → `{ result[], next }` — page-based pagination
   - Pass `assignee: attorneyId` for per-attorney completeness fallback when general fetch returns zero entries for a known attorney
 - `POST /time-entries/summary { start: dateFrom }` → `{ total_duration_hours, ... }` — used as post-fetch validation
 - `POST /invoices/search { size:100, page:N, start: dateFrom }` → root-level array, page pagination
 - `POST /ledgers/search { ledger_type: "OFFICE_PAYMENT" | "CLIENT_TO_OFFICE" | "OFFICE_RECEIPT", size:100, page:N, start: dateFrom }` — three parallel calls, one per type. The DTO accepts only a single `ledger_type` value.
 - `GET /tasks?page=N&limit=100`
-- `GET /contacts?is_archived=false&ids_filter=[]&tag=&company=&page=N&limit=100` (currently disabled)
+- `GET /contacts?is_archived=false&ids_filter=[]&tag=&company=&page=N&limit=100` — **disabled**. Client display names are available inline on `matters.clients[].contact.display_name` and `invoices.clients[].display_name`. Re-enable if standalone contact profiles are needed.
 
 Step 3 — Summary (single call):
 - `GET /invoices/summary` → `{ unpaid, paid, total }`

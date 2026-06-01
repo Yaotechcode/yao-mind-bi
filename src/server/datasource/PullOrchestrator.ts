@@ -168,7 +168,7 @@ export class PullOrchestrator {
       await adapter.authenticate();
 
       const firmConfig = await getFirmConfig(firmId);
-      const lookbackMonths = firmConfig?.dataPullLookbackMonths ?? 13;
+      const lookbackMonths = firmConfig?.dataPullLookbackMonths ?? 6;
       const fromDateObj = new Date();
       fromDateObj.setMonth(fromDateObj.getMonth() - lookbackMonths);
       const dateFrom = fromDateObj.toISOString().split('T')[0];

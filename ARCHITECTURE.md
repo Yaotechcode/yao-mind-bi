@@ -253,7 +253,7 @@ Runs inside a Netlify Background Function. Triggered by user clicking Pull from 
 | Stage | What |
 |---|---|
 | Auth | Re-authenticate to Yao API. Decrypt credentials from Supabase. POST /attorneys/login. Never cache token. |
-| Fetch | Step 1: attorneys + departments + case-types in parallel (lookup tables, no pagination). Step 2: matters + time-entries + invoices + ledgers + tasks + contacts with pagination loops. Step 3: invoices/summary. |
+| Fetch | Step 1: attorneys + departments + case-types in parallel (lookup tables, no pagination). Step 2: matters (active statuses only) + time-entries + invoices + ledgers + tasks with pagination loops. Contacts disabled (display names available inline on matters/invoices). Step 3: invoices/summary (defined but not currently wired into pull). Lookback default: 6 months (applies to time entries, invoices, ledgers — not matters). |
 | Normalise | Apply 12 field transformations. Strip password and email_default_signature. Route ledger records by type. Resolve all ObjectId references using in-memory lookup maps. |
 | Enrich | Aggregate WIP per matter and fee earner. Derive datePaid from ledger routing. Build client profiles. Merge fee earner CSV data (payModel, salary, targets). |
 | Calculate | Run full formula engine. Apply RAG thresholds. Run risk scanner. Generate risk_flags. |
@@ -283,12 +283,12 @@ Credentials stored AES-256 encrypted in Supabase yao_api_credentials. POST /atto
 | Attorneys | /attorneys | GET | None | Array |
 | Departments | /departments | GET | None | Array |
 | Case Types | /case-types/active | GET | None | Array |
-| Matters | /matters | GET | page + limit | rows[] |
+| Matters | /matters | GET | page + limit | rows[] | Active statuses only: IN_PROGRESS, ON_HOLD, EXCHANGED, QUOTE, NOT_PROCEEDING. Passed as comma-separated `status` query param. |
 | Time Entries | /time-entries/search | POST | cursor: next | result[] |
 | Invoices | /invoices/search | POST | page + size | Array |
 | Ledgers | /ledgers/search | POST | page + size | Array |
 | Tasks | /tasks | GET | page + limit | Array |
-| Contacts | /contacts | GET | page + limit | Array |
+| Contacts | /contacts | GET | page + limit | Array | **Disabled** — display names available inline on matters/invoices. |
 | Invoice Summary | /invoices/summary | GET | None | Object |
 
 ### Ledger Routing Logic

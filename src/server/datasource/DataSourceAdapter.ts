@@ -683,12 +683,44 @@ export class DataSourceAdapter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Fetches all matters via page-based pagination.
+   * Active matter statuses fetched for MVP scope.
+   *
+   * MVP excludes ARCHIVED and COMPLETED (plus CLOSED, DESTROYED, LOCKED, DRAFT) because
+   * the MVP dashboards report on the firm's *live* book of work — matters still consuming
+   * effort and capital. ARCHIVED/COMPLETED matters are finished engagements: pulling them
+   * inflates counts, skews WIP-age and budget-burn distributions, and adds volume that the
+   * 6-month lookback is meant to keep lean. Active-only keeps the snapshot focused on what
+   * partners can still act on.
+   *
+   * Trade-off (deliberate, not a data-quality bug): time entries, invoices, and ledgers are
+   * fetched independently by date range, so records belonging to a recently-completed matter
+   * will still be pulled. Those will fail to join to a fetched matter and carry
+   * hasMatchedMatter = false. Accepted for MVP — revisit if recently-closed matters need
+   * revenue attribution.
+   */
+  private static readonly ACTIVE_MATTER_STATUSES = [
+    'IN_PROGRESS', 'ON_HOLD', 'EXCHANGED', 'QUOTE', 'NOT_PROCEEDING',
+  ] as const;
+
+  /**
+   * Fetches active matters via page-based pagination.
+   *
+   * Applies a server-side `status` filter (MVP scope: active matters only — excludes
+   * ARCHIVED, COMPLETED, CLOSED, DESTROYED, LOCKED, DRAFT). See ACTIVE_MATTER_STATUSES.
+   *
+   * NOTE on param encoding: parallelPaginateGet takes params as Record<string, string>
+   * and request() applies them via URLSearchParams.set(), so only a single string value
+   * per key is possible. We therefore pass the active statuses as a comma-separated
+   * `status` value. ASSUMPTION: the Yao GET /matters endpoint parses a comma-separated
+   * `status` query param into a status set. If the endpoint instead expects repeated
+   * `status=` params, the params type/request() would need to support string[] values.
+   *
    * Prunes to keep only fields needed for KPI calculation. Also strips any
    * sensitive nested fields (password, email_default_signature) as a belt-and-suspenders measure.
    */
   async fetchMatters(): Promise<YaoMatter[]> {
-    const raw = await this.parallelPaginateGet<Record<string, unknown>>('/matters', {}, 'rows', 50);
+    const params = { status: DataSourceAdapter.ACTIVE_MATTER_STATUSES.join(',') };
+    const raw = await this.parallelPaginateGet<Record<string, unknown>>('/matters', params, 'rows', 50);
     const pruned = pruneArray(raw, MATTER_KEEP_FIELDS);
     return pruned.map(m => stripNestedSensitiveFields(m)) as unknown as YaoMatter[];
   }
