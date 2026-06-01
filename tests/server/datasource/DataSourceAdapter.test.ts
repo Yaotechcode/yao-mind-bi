@@ -411,14 +411,14 @@ describe('fetchAttorneys()', () => {
     return adapter;
   }
 
-  it('filters out disabled attorneys', async () => {
+  it('returns all attorneys including disabled (needed for resolving historical data)', async () => {
     const adapter = await authenticatedAdapter();
     mockFetch.mockResolvedValueOnce(makeResponse([
       { _id: '1', name: 'Active', surname: 'User', status: 'ACTIVE' },
       { _id: '2', name: 'Disabled', surname: 'User', status: 'disabled' },
     ]));
     const result = await adapter.fetchAttorneys();
-    expect(result).toHaveLength(1);
-    expect(result[0]._id).toBe('1');
+    expect(result).toHaveLength(2);
+    expect(result.map((a) => a._id)).toEqual(['1', '2']);
   });
 });

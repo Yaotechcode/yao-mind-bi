@@ -45,11 +45,15 @@ import {
 } from './normalise/transformations.js';
 import { resolveAll } from './normalise/resolver.js';
 import { stripSensitiveFromArray } from './normalise/stripper.js';
-import { buildWipEnrichment } from './enrich/wip-aggregator.js';
-import { enrichInvoicesWithDatePaid } from './enrich/invoice-enricher.js';
+import { buildWipEnrichment, type WipSummary } from './enrich/wip-aggregator.js';
+import {
+  enrichInvoicesWithDatePaid,
+  aggregateInvoicesByMatter,
+} from './enrich/invoice-enricher.js';
 import { mergeAllFeeEarners } from './enrich/fee-earner-merger.js';
 import { buildClientProfiles } from './enrich/client-profile-builder.js';
 import { buildSnapshotsFromKpiResults } from './enrich/kpi-snapshot-builder.js';
+import type { NormalisedInvoice, NormalisedDisbursement } from './normalise/types.js';
 import { CalculationOrchestrator } from '../formula-engine/orchestrator.js';
 import { scanForRiskFlags } from './enrich/risk-scanner.js';
 import {
@@ -90,8 +94,11 @@ export interface PullOrchestratorDeps {
     DataSourceAdapter,
     | 'authenticate'
     | 'fetchLookupTables'
+    | 'fetchTargets'
     | 'fetchMatters'
     | 'fetchTimeEntries'
+    | 'fetchTimeEntrySummary'
+    | 'validateTimeEntryTotals'
     | 'fetchInvoices'
     | 'fetchLedgers'
     | 'fetchTasks'
@@ -176,6 +183,28 @@ export class PullOrchestrator {
       stats.attorneys = attorneys.length;
 
       // -----------------------------------------------------------------------
+      // Step 4b: Fetch targets for current month (best effort)
+      //
+      // Provides per-attorney work_hours_per_day + non_chargeable_ratio, used
+      // as a fallback for fee earners with no CSV upload. Returns null if not
+      // configured (404) — non-fatal.
+      // -----------------------------------------------------------------------
+      const competence = new Date().toISOString().slice(0, 7); // YYYY-MM
+      const targets = await adapter.fetchTargets(competence);
+      const targetsByUser = new Map<string, { workHoursPerDay: number; nonChargeableRatio: number }>();
+      if (targets?.user_targets) {
+        for (const ut of targets.user_targets) {
+          targetsByUser.set(ut.user_id, {
+            workHoursPerDay: ut.work_hours_per_day,
+            nonChargeableRatio: ut.non_chargeable_ratio,
+          });
+        }
+        console.log(`[PullOrchestrator] targets API: ${targetsByUser.size} user targets for ${competence}`);
+      } else {
+        console.log(`[PullOrchestrator] targets API: no targets returned for ${competence}`);
+      }
+
+      // -----------------------------------------------------------------------
       // Step 5: Fetch matters
       // -----------------------------------------------------------------------
       await updatePullStage(firmId, 'Fetching matters');
@@ -189,8 +218,10 @@ export class PullOrchestrator {
       // Each entity's raw data goes out of scope before the next fetch begins.
       // -----------------------------------------------------------------------
 
-      // --- 6a-1: Process matters + fee earners (matters already fetched in Step 5)
-      // safeMatters kept in outer scope — needed for client profiles in 6a-5
+      // --- 6a-1: Normalise matters + fee earners (matters already fetched in Step 5)
+      // safeMatters store is DEFERRED until after WIP and invoice aggregation are
+      // merged in (Step 6c). Without that merge, wipTotalBillable would be 0 on
+      // every matter, blocking F-RB-01 (firm realisation).
       // -----------------------------------------------------------------------
       await updatePullStage(firmId, 'Processing matters');
 
@@ -209,6 +240,13 @@ export class PullOrchestrator {
       );
       // rawMatters no longer referenced after this point
 
+      // Archived matters — used by ledger fetch to skip irrelevant ledger records
+      const archivedMatterIds = new Set<string>(
+        (safeMatters as unknown as Array<Record<string, unknown>>)
+          .filter((m) => m['status'] === 'ARCHIVED')
+          .map((m) => String(m['_id'] ?? '')),
+      );
+
       void departments; // stored via maps, not as enriched entity
       void caseTypes;
 
@@ -220,10 +258,9 @@ export class PullOrchestrator {
         warnings.push(`Fee earner CSV merge skipped: ${msg}`);
       }
 
-      // Store matters now; feeEarner store is deferred until after time entries
-      // are processed so wipChargeableHours, wipTotalHours, and departmentName
-      // can be computed and attached in one atomic write.
-      await storeEnrichedEntities(firmId, 'matter', safeMatters as unknown as Record<string, unknown>[], [], undefined);
+      // wipByMatter is set inside the time-entries block and consumed during
+      // matter enrichment in Step 6c.
+      let wipByMatter: Map<string, WipSummary> | null = null;
 
       // --- 6a-2: Time entries — fetch, normalise, enrich (WIP), store, release
       // rawTimeEntries and safeTimeEntries released at end of block.
@@ -233,7 +270,11 @@ export class PullOrchestrator {
       const chargeableHoursByLawyer = new Map<string, number>();
       const totalHoursByLawyer      = new Map<string, number>();
       {
-        const rawTimeEntries  = await adapter.fetchTimeEntries(dateFrom);
+        // Pass attorney IDs for the completeness fallback — works around the
+        // known Yao API edge case where the unfiltered query misses entries
+        // for certain attorneys (e.g. Ben Haulkham, Carla Fishlock).
+        const attorneyIds = attorneys.map((a) => a._id);
+        const rawTimeEntries  = await adapter.fetchTimeEntries(dateFrom, attorneyIds);
         stats.timeEntries     = rawTimeEntries.length;
         const safeTimeEntries = stripSensitiveFromArray(
           resolveAll(
@@ -260,7 +301,23 @@ export class PullOrchestrator {
           }
         }
 
+        // Validate against /time-entries/summary — detects silent pagination
+        // failures by comparing fetched total against server-computed total.
+        try {
+          const fetchedHours = (safeTimeEntries as unknown as Array<Record<string, unknown>>).reduce(
+            (s, e) => s + (typeof e['durationHours'] === 'number' ? (e['durationHours'] as number) : 0),
+            0,
+          );
+          const summary = await adapter.fetchTimeEntrySummary(dateFrom);
+          adapter.validateTimeEntryTotals(fetchedHours, summary);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`[PullOrchestrator] time entries summary validation skipped: ${msg}`);
+        }
+
         const wipEnrichment = buildWipEnrichment(safeTimeEntries);
+        // Promote byMatter to outer scope — needed for matter enrichment in Step 6c.
+        wipByMatter = wipEnrichment.byMatter;
         await Promise.all([
           storeEnrichedEntities(firmId, 'timeEntry', safeTimeEntries as unknown as Record<string, unknown>[], [], undefined),
           storeEnrichedEntities(firmId, 'wip',       [wipEnrichment as unknown as Record<string, unknown>],   [], undefined),
@@ -290,18 +347,33 @@ export class PullOrchestrator {
               if (count > maxCount) { maxCount = count; topDept = dept; }
             }
           }
+
+          // Targets API fallback: if no CSV match populated targetWeeklyHours
+          // or chargeableWeeklyTarget, derive them from the targets endpoint.
+          const target = targetsByUser.get(id);
+          const csvTargetWeekly      = fe['targetWeeklyHours']        as number | null | undefined;
+          const csvChargeableWeekly  = fe['chargeableWeeklyTarget']   as number | null | undefined;
+          const apiWeeklyHours       = target ? target.workHoursPerDay * 5 : null;
+          const apiChargeableWeekly  = target ? target.workHoursPerDay * 5 * (1 - target.nonChargeableRatio) : null;
+
           return {
             ...fe,
-            departmentName:     topDept,
-            wipChargeableHours: chargeableHoursByLawyer.get(id) ?? 0,
-            wipTotalHours:      totalHoursByLawyer.get(id)      ?? 0,
+            departmentName:        topDept,
+            wipChargeableHours:    chargeableHoursByLawyer.get(id) ?? 0,
+            wipTotalHours:         totalHoursByLawyer.get(id)      ?? 0,
+            targetWeeklyHours:     csvTargetWeekly      ?? apiWeeklyHours      ?? null,
+            chargeableWeeklyTarget: csvChargeableWeekly ?? apiChargeableWeekly ?? null,
           };
         });
 
+        const targetsMerged = enrichedWithAggregates.filter(
+          (fe) => targetsByUser.has(String((fe as Record<string, unknown>)['_id'] ?? '')),
+        ).length;
         await storeEnrichedEntities(firmId, 'feeEarner', enrichedWithAggregates, [], undefined);
         console.log(
           `[PullOrchestrator] stored ${enrichedWithAggregates.length} fee earners with ` +
-          `departmentName + WIP hours (${chargeableHoursByLawyer.size} attorneys have chargeable hours)`,
+          `departmentName + WIP hours (${chargeableHoursByLawyer.size} have chargeable hours, ` +
+          `${targetsMerged} have targets API data)`,
         );
       }
 
@@ -310,8 +382,9 @@ export class PullOrchestrator {
         timeEntries: stats.timeEntries,
       });
 
-      // --- 6a-3: Invoices — fetch, normalise, store
-      // safeInvoices kept in outer scope — needed for client profiles in 6a-5
+      // --- 6a-3: Invoices — fetch, normalise. Store DEFERRED until Step 6c
+      // so that datePaid (derived from ledger records in Step 6b) can be merged
+      // before the persisted write. safeInvoices is consumed by Step 6c.
       // -----------------------------------------------------------------------
       await updatePullStage(firmId, 'Fetching invoices');
       const rawInvoices  = await adapter.fetchInvoices(dateFrom);
@@ -328,7 +401,6 @@ export class PullOrchestrator {
           maps,
         ).invoices,
       );
-      await storeEnrichedEntities(firmId, 'invoice', safeInvoices as unknown as Record<string, unknown>[], [], undefined);
       // rawInvoices no longer referenced after this point
       await updatePullStage(firmId, 'Fetching invoices', {
         matters:     stats.matters,
@@ -379,19 +451,94 @@ export class PullOrchestrator {
       // await updatePullStage(firmId, 'Fetching contacts', { ... }); // disabled with contacts
 
       // -----------------------------------------------------------------------
-      // Step 6b: LEDGERS DISABLED — pending Yao API server-side type filtering
-      // Re-enable Step 6b once API supports types filter on POST /ledgers/search
+      // Step 6b: Ledgers — parallel triple-fetch by ledger_type
+      //
+      // The Yao API only accepts a single LedgerEntryType per call (`ledger_type`),
+      // so three parallel paginated requests cover the BI-relevant types:
+      //   OFFICE_PAYMENT       → disbursements
+      //   CLIENT_TO_OFFICE     → invoice payments + disbursement recoveries
+      //   OFFICE_RECEIPT       → invoice payments + disbursement recoveries
       // -----------------------------------------------------------------------
-      // const archivedMatterIds = new Set(
-      //   rawMatters.filter((m) => m.status === 'ARCHIVED').map((m) => m._id),
-      // );
-      // await updatePullStage(firmId, 'Fetching ledgers');
-      // const rawLedgersList = await adapter.fetchLedgers(dateFrom, archivedMatterIds);
-      // const ledgers = adapter.routeLedgers(rawLedgersList);
-      // stats.disbursements = ledgers.disbursements.length;
+      await updatePullStage(firmId, 'Fetching ledgers');
+      const [officePaymentLedgers, clientToOfficeLedgers, officeReceiptLedgers] = await Promise.all([
+        adapter.fetchLedgers('OFFICE_PAYMENT',   dateFrom, archivedMatterIds),
+        adapter.fetchLedgers('CLIENT_TO_OFFICE', dateFrom, archivedMatterIds),
+        adapter.fetchLedgers('OFFICE_RECEIPT',   dateFrom, archivedMatterIds),
+      ]);
+      const allLedgers = [...officePaymentLedgers, ...clientToOfficeLedgers, ...officeReceiptLedgers];
+      const routed = adapter.routeLedgers(allLedgers);
+      console.log(
+        `[PullOrchestrator] ledgers: ${allLedgers.length} total | ` +
+        `disbursements=${routed.disbursements.length}, ` +
+        `invoicePayments=${routed.invoicePayments.length}, ` +
+        `disbursementRecoveries=${routed.disbursementRecoveries.length}`,
+      );
 
-      // (invoice store: 6a-3; client profiles store: 6a-5; disbursement store: disabled with ledgers)
-      // await updatePullStage(firmId, 'Fetching ledgers', { disbursements: stats.disbursements }); // disabled with ledgers
+      // Build normalised disbursement entities from OFFICE_PAYMENT records
+      const safeDisbursements = stripSensitiveFromArray(
+        resolveAll(
+          {
+            matters:       [],
+            timeEntries:   [],
+            invoices:      [],
+            disbursements: routed.disbursements.map(transformDisbursement),
+            tasks:         [],
+          },
+          maps,
+        ).disbursements,
+      );
+      stats.disbursements = safeDisbursements.length;
+      await updatePullStage(firmId, 'Fetching ledgers', { disbursements: stats.disbursements });
+
+      // -----------------------------------------------------------------------
+      // Step 6c: Final enrichment + stores
+      //   1. Derive datePaid on invoices using invoicePayments ledgers
+      //   2. Aggregate invoices by matter
+      //   3. Merge WIP + invoice aggregates into matter records
+      //   4. Store matters, invoices, disbursements (in parallel)
+      // -----------------------------------------------------------------------
+      await updatePullStage(firmId, 'Enriching matters with WIP and invoice aggregates');
+      const enrichedInvoices = enrichInvoicesWithDatePaid(
+        safeInvoices as unknown as NormalisedInvoice[],
+        routed.invoicePayments,
+      );
+      const invoiceByMatter = aggregateInvoicesByMatter(enrichedInvoices);
+
+      const mattersFinal = (safeMatters as unknown as Array<Record<string, unknown>>).map((m) => {
+        const mId = String(m['_id'] ?? '');
+        if (!mId) return m;
+        const wip = wipByMatter?.get(mId);
+        const inv = invoiceByMatter.get(mId);
+        const out: Record<string, unknown> = { ...m };
+        if (wip) {
+          out['wipTotalBillable']      = wip.totalBillable;
+          out['wipTotalWriteOff']      = wip.totalWriteOff;
+          out['wipTotalHours']         = wip.totalHours;
+          out['wipChargeableHours']    = wip.chargeableHours;
+          out['wipNonChargeableHours'] = wip.nonChargeableHours;
+        }
+        if (inv) {
+          out['invoicedNetBilling']   = inv.invoicedNetBilling;
+          out['invoicedOutstanding']  = inv.invoicedOutstanding;
+          out['invoicedPaid']         = inv.invoicedPaid;
+          out['invoicedWrittenOff']   = inv.invoicedWrittenOff;
+          out['invoiceCount']         = inv.invoiceCount;
+        }
+        return out;
+      });
+
+      const mattersWithWip      = mattersFinal.filter((m) => m['wipTotalBillable']     != null).length;
+      const mattersWithInvoices = mattersFinal.filter((m) => m['invoicedNetBilling']    != null).length;
+      console.log(
+        `[PullOrchestrator] matter enrichment: ${mattersFinal.length} matters | ` +
+        `WIP merged into ${mattersWithWip} | invoice aggregates merged into ${mattersWithInvoices}`,
+      );
+
+      await Promise.all([
+        storeEnrichedEntities(firmId, 'matter',       mattersFinal,                                                                  [], undefined),
+        storeEnrichedEntities(firmId, 'invoice',      enrichedInvoices as unknown as Record<string, unknown>[],                      [], undefined),
+        storeEnrichedEntities(firmId, 'disbursement', safeDisbursements as unknown as Record<string, unknown>[],                     [], undefined),
+      ]);
 
       // -----------------------------------------------------------------------
       // Step 10: Calculate KPIs

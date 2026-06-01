@@ -107,20 +107,32 @@ All transactional data. Credentials (email + password) stored AES-256 encrypted 
 **Pull sequence:**
 
 Step 1 — Lookup tables (fetch once, build in-memory maps):
-- `GET /attorneys` → `attorneyMap { _id → { fullName, rate, status, integrationId } }`
+- `GET /attorneys` → `attorneyMap { _id → { fullName, rate, status, integrationId } }` — keep ALL attorneys (active + disabled) so historical records resolve
 - `GET /departments` → `departmentMap { _id → title }`
 - `GET /case-types/active` → `caseTypeMap { _id → { title, departmentId, isFixedFee } }`
+- `GET /targets/{YYYY-MM}` → optional firm-wide targets (`user_targets[].work_hours_per_day`, `non_chargeable_ratio`, `workday_rules.excluded_dates`). Returns null on 404 — non-fatal fallback for fee earners with no CSV upload.
 
 Step 2 — Transactional data (paginated loops):
 - `GET /matters?page=N&limit=100` → `{ rows[], limit }` — increment page until `rows.length < limit`
-- `POST /time-entries/search { size:100, next:N }` → `{ result[], next }` — cursor pagination, loop until `next` absent
-- `POST /invoices/search { size:100, page:N }` → page pagination
-- `POST /ledgers/search { types:["OFFICE_PAYMENT","CLIENT_TO_OFFICE","OFFICE_RECEIPT"], size:100, page:N }`
+- `POST /time-entries/search { size:100, page:N, start: dateFrom }` → `{ result[], next }` — page-based pagination
+  - Pass `assignee: attorneyId` for per-attorney completeness fallback when general fetch returns zero entries for a known attorney
+- `POST /time-entries/summary { start: dateFrom }` → `{ total_duration_hours, ... }` — used as post-fetch validation
+- `POST /invoices/search { size:100, page:N, start: dateFrom }` → root-level array, page pagination
+- `POST /ledgers/search { ledger_type: "OFFICE_PAYMENT" | "CLIENT_TO_OFFICE" | "OFFICE_RECEIPT", size:100, page:N, start: dateFrom }` — three parallel calls, one per type. The DTO accepts only a single `ledger_type` value.
 - `GET /tasks?page=N&limit=100`
-- `GET /contacts?is_archived=false&ids_filter=[]&tag=&company=&page=N&limit=100`
+- `GET /contacts?is_archived=false&ids_filter=[]&tag=&company=&page=N&limit=100` (currently disabled)
 
 Step 3 — Summary (single call):
 - `GET /invoices/summary` → `{ unpaid, paid, total }`
+
+**Date field name:** Use `start` (and `end`) on time entries, invoices, and ledgers — NOT `date_from`. NestJS strips unknown fields silently, so `date_from` returns full history regardless of the lookback window.
+
+**Spec discrepancies (consult NestJS DTO source, not OpenAPI):**
+- Search DTOs (time-entries / invoices / ledgers) list ALL fields as `required` due to a Swagger generation bug. Only `page` and `size` are truly required. Omit optional fields entirely; do not send empty strings or null.
+- `/dashboard/*` endpoints return Metabase embed URLs (`{ url }`), not BI data. Never call from Yao Mind.
+- `GET /targets/progress` returns actual recorded performance — NOT the configured targets. Use `GET /targets/{competence}` for targets.
+- `invoice.outstanding` is the authoritative unpaid balance — no ledger aggregation needed for aged debtor analysis.
+- `matter.office_account_balance` provides the per-matter outstanding debtor position with no extra API calls.
 
 **Ledger routing logic** (apply in normalise stage):
 - `OFFICE_PAYMENT` → disbursement entity
@@ -135,7 +147,7 @@ Step 3 — Summary (single call):
 4. `datePaid`: find `CLIENT_TO_OFFICE` or `OFFICE_RECEIPT` where `invoice == invoice._id`, use `ledger.date`
 5. `isFixedFee`: `caseTypeMap[case_type._id].fixed_fee > 0`
 6. `isActive`: `status IN ['IN_PROGRESS','ON_HOLD','EXCHANGED','QUOTE']`
-7. `isClosed`: `status IN ['COMPLETED','ARCHIVED','CLOSED']`
+7. `isClosed`: `status IN ['COMPLETED','ARCHIVED','CLOSED','NOT_PROCEEDING','DESTROYED','LOCKED']` (matter status enum has 11 values total)
 8. `durationHours`: `duration_minutes / 60`
 9. `firmExposure`: `abs(outstanding)` where `outstanding < 0` on `OFFICE_PAYMENT`
 10. `isRecovered`: `outstanding == 0` on `OFFICE_PAYMENT`

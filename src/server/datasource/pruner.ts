@@ -56,6 +56,10 @@ export const MATTER_KEEP_FIELDS = [
 export const TIME_ENTRY_KEEP_FIELDS = [
   '_id', 'do_not_bill', 'billable', 'write_off', 'duration_minutes', 'units',
   'matter', 'assignee', 'activity', 'work_type', 'date', 'department',
+  // invoice links the entry to its invoice (ObjectId); status confirms the
+  // entry is ACTIVE (not CONSOLIDATED etc). Both needed for fee earner
+  // revenue attribution via time entry billable values.
+  'invoice', 'status',
 ];
 
 export const INVOICE_KEEP_FIELDS = [
@@ -67,6 +71,8 @@ export const INVOICE_KEEP_FIELDS = [
   'billing_amount', 'billable_entries', 'total_disbursements', 'credited', 'vat_percentage',
   // status kept for invoice aggregation filtering (DRAFT/CANCELED/ERROR exclusions)
   'status',
+  // fee earner attribution: override uplift (Branch 2) and fixed/other fees (Branch 3)
+  'time_entries_override_value', 'time_entries', 'total_other_fees',
 ];
 
 export const LEDGER_KEEP_FIELDS = [

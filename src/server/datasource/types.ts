@@ -78,12 +78,17 @@ export interface YaoTimeEntry {
   billable: number;
   write_off: number;
   duration_minutes: number;
+  units?: number;
   matter: { _id: string; number: number };
   assignee?: { _id: string; name: string; surname: string } | null;
   activity?: { title: string } | null;
   work_type?: string;
   date: string;
   department?: { _id: string; title: string } | null;
+  /** ACTIVE | CONSOLIDATED | CONSOLIDATION_TARGET — absent on older entries. */
+  status?: string;
+  /** ObjectId string of the invoice this entry was consolidated onto; null/absent when uninvoiced. */
+  invoice?: string | null;
 }
 
 export interface YaoInvoice {
@@ -102,10 +107,19 @@ export interface YaoInvoice {
   billing_amount?: number;
   billable_entries?: number;
   total_disbursements?: number;
+  total_other_fees?: number;
   credited?: number;
   vat_percentage?: number;
   // status kept for aggregation filtering (DRAFT/CANCELED/ERROR exclusions)
   status?: string;
+  /** Manual upward override of the invoice's total billable-entry value. */
+  time_entries_override_value?: number;
+  /**
+   * Time entries consolidated onto this invoice. The API returns either plain
+   * ObjectId strings or embedded objects (and, defensively, sometimes a plain
+   * object rather than an array — guard with Array.isArray before reducing).
+   */
+  time_entries?: Array<string | { _id: string; value?: number }>;
   clients: Array<{ _id: string; display_name: string }>;
   solicitor?: { _id: string; name: string; surname: string } | null;
   matter?: { _id: string; number: number } | null;
@@ -186,6 +200,46 @@ export interface YaoContact {
   type: 'Person' | 'Company';
   display_name: string;
   company_name?: string;
+}
+
+/**
+ * Response shape for GET /targets/{competence}.
+ * `competence` is a YYYY-MM string identifying the month.
+ *
+ * Provides per-attorney working-hour targets and firm-wide workday rules
+ * (working days per month, excluded dates for bank holidays etc) — used
+ * to populate the utilisation denominator without requiring CSV upload.
+ */
+export interface YaoTargetsFirm {
+  law_firm: string;
+  competence: string;
+  global?: {
+    target_billing?: number;
+    target_hours?: number;
+  };
+  workday_rules?: {
+    working_days_per_month: number;
+    excluded_dates: string[];
+  };
+  user_targets: Array<{
+    user_id: string;
+    work_hours_per_day: number;
+    non_chargeable_ratio: number;
+    rate_per_hour?: number;
+    billing_override?: number;
+  }>;
+}
+
+/**
+ * Response shape for POST /time-entries/summary — used as a post-fetch
+ * validation step against the paginated /time-entries/search results.
+ */
+export interface YaoTimeEntrySummary {
+  total_duration_hours: number;
+  total_duration_minutes: number;
+  total_units: number;
+  total_days: number;
+  total_value: number;
 }
 
 // =============================================================================

@@ -37,7 +37,7 @@ function createBuilder(state: MockState = {}) {
 
   const terminal = { data, error };
 
-  for (const m of ['eq', 'in', 'order', 'select', 'limit']) {
+  for (const m of ['eq', 'in', 'order', 'select', 'limit', 'range']) {
     b[m] = vi.fn().mockReturnValue(b);
   }
 

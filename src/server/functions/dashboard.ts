@@ -1,14 +1,18 @@
 /**
  * dashboard.ts — Netlify Function
  *
- * Routes dashboard data requests to the dashboard service.
+ * Routes dashboard data requests to the dashboard service. Route names
+ * match the frontend's `DashboardId` union (api-client.ts).
  *
  *   GET /api/dashboard/firm-overview          → getFirmOverviewData
  *   GET /api/dashboard/fee-earner-performance → getFeeEarnerPerformanceData
- *   GET /api/dashboard/wip                    → getWipData
- *   GET /api/dashboard/billing                → getBillingCollectionsData
- *   GET /api/dashboard/matters                → getMatterAnalysisData
- *   GET /api/dashboard/clients                → getClientIntelligenceData
+ *   GET /api/dashboard/wip-leakage            → getWipData
+ *   GET /api/dashboard/billing-collections    → getBillingCollectionsData
+ *   GET /api/dashboard/matter-analysis        → getMatterAnalysisData
+ *   GET /api/dashboard/client-intelligence    → getClientIntelligenceData
+ *
+ * Legacy short names (`wip`, `billing`, `matters`, `clients`) are accepted
+ * for backwards compatibility — used by csv/pdf export services.
  */
 
 import type { Handler } from '@netlify/functions';
@@ -74,15 +78,19 @@ export const handler: Handler = async (event) => {
       case 'fee-earner-performance':
         return successResponse(await getFeeEarnerPerformanceData(firmId, filters));
 
+      case 'wip-leakage':
       case 'wip':
         return successResponse(await getWipData(firmId, filters));
 
+      case 'billing-collections':
       case 'billing':
         return successResponse(await getBillingCollectionsData(firmId, filters));
 
+      case 'matter-analysis':
       case 'matters':
         return successResponse(await getMatterAnalysisData(firmId, filters));
 
+      case 'client-intelligence':
       case 'clients':
         return successResponse(await getClientIntelligenceData(firmId, filters));
 

@@ -35,7 +35,17 @@ import type {
 // =============================================================================
 
 const ACTIVE_STATUSES = new Set(['IN_PROGRESS', 'ON_HOLD', 'EXCHANGED', 'QUOTE']);
-const CLOSED_STATUSES = new Set(['COMPLETED', 'ARCHIVED', 'CLOSED']);
+// Yao API matter status enum has 11 values. NOT_PROCEEDING, DESTROYED, and
+// LOCKED are terminal states that should be classified alongside CLOSED for
+// BI purposes (excluded from active-matter KPIs, included in historical totals).
+const CLOSED_STATUSES = new Set([
+  'COMPLETED',
+  'ARCHIVED',
+  'CLOSED',
+  'NOT_PROCEEDING',
+  'DESTROYED',
+  'LOCKED',
+]);
 
 // =============================================================================
 // Shared helpers
@@ -145,7 +155,7 @@ export function transformMatter(raw: YaoMatter, maps: LookupMaps): NormalisedMat
 export function transformTimeEntry(raw: YaoTimeEntry): NormalisedTimeEntry {
   return {
     _id: raw._id,
-    // description, rate, client_rate, units, status, invoice, created_at, updated_at
+    // description, rate, client_rate, created_at, updated_at
     // not in TIME_ENTRY_KEEP_FIELDS — default to empty/zero/null
     description: '',
     activityType: raw.activity?.title ?? raw.work_type ?? null,
@@ -161,6 +171,7 @@ export function transformTimeEntry(raw: YaoTimeEntry): NormalisedTimeEntry {
     writeOff: raw.write_off,
     recordedValue: raw.billable + raw.write_off,
     status: 'ACTIVE',
+    entryStatus: raw.status ?? 'ACTIVE',
     lawyerId: raw.assignee?._id ?? null,
     lawyerName: raw.assignee
       ? fullName(raw.assignee.name, raw.assignee.surname)
@@ -170,7 +181,7 @@ export function transformTimeEntry(raw: YaoTimeEntry): NormalisedTimeEntry {
     lawyerIntegrationId: null, // populated by resolution layer
     matterId: raw.matter._id,
     matterNumber: raw.matter.number,
-    invoice: null,
+    invoiceId: raw.invoice ?? null,
     date: raw.date,
     createdAt: '',
     updatedAt: '',
@@ -181,6 +192,12 @@ export function transformInvoice(raw: YaoInvoice): NormalisedInvoice {
   const totalDisbursements = raw.total_disbursements ?? 0;
   const totalFirmFees = raw.total_firm_fees ?? 0;
   const subtotal = raw.subtotal ?? 0;
+  // time_entries may be absent, an array of strings, or an array of embedded
+  // objects. Guard with Array.isArray before mapping (the API has been seen to
+  // return a plain object here, which would otherwise throw).
+  const timeEntryIds = Array.isArray(raw.time_entries)
+    ? raw.time_entries.map((te) => (typeof te === 'string' ? te : te._id))
+    : [];
   return {
     _id: raw._id,
     invoiceNumber: raw.invoice_number,
@@ -191,8 +208,10 @@ export function transformInvoice(raw: YaoInvoice): NormalisedInvoice {
     billableEntries: raw.billable_entries ?? 0,
     feeEarnerRevenue: subtotal - totalFirmFees - totalDisbursements,
     totalDisbursements,
-    totalOtherFees: 0,
+    totalOtherFees: raw.total_other_fees ?? 0,
     totalFirmFees,
+    timeEntriesOverrideValue: raw.time_entries_override_value ?? 0,
+    timeEntryIds,
     writeOff: raw.write_off,
     total: raw.total,
     outstanding: raw.outstanding,

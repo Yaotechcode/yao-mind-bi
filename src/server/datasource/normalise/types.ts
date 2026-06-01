@@ -104,6 +104,8 @@ export interface NormalisedTimeEntry {
   writeOff: number;
   recordedValue: number;
   status: string;
+  /** Raw status from the API (ACTIVE | CONSOLIDATED | CONSOLIDATION_TARGET); distinct from the derived isChargeable flag. */
+  entryStatus: string;
   lawyerId: string | null;
   lawyerName: string | null;
   /** Populated by resolution layer from attorneyMap. */
@@ -114,7 +116,8 @@ export interface NormalisedTimeEntry {
   lawyerIntegrationId: string | null;
   matterId: string;
   matterNumber: number;
-  invoice: string | null;
+  /** ObjectId of the invoice this entry was consolidated onto; null if not yet invoiced. */
+  invoiceId: string | null;
   date: string;
   createdAt: string;
   updatedAt: string;
@@ -135,6 +138,10 @@ export interface NormalisedInvoice {
   totalDisbursements: number;
   totalOtherFees: number;
   totalFirmFees: number;
+  /** Manual upward override of the invoice's total billable-entry value (Branch 2 source). */
+  timeEntriesOverrideValue: number;
+  /** Time entry _ids consolidated onto this invoice, as strings regardless of API shape. */
+  timeEntryIds: string[];
   writeOff: number;
   total: number;
   outstanding: number;

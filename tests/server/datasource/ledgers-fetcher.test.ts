@@ -84,7 +84,7 @@ describe('fetchLedgers()', () => {
     const adapter = await authenticatedAdapter();
     mockFetch.mockResolvedValueOnce(makeResponse([]));
 
-    const result = await adapter.fetchLedgers();
+    const result = await adapter.fetchLedgers('OFFICE_PAYMENT');
     expect(result).toHaveLength(0);
   });
 
@@ -101,21 +101,34 @@ describe('fetchLedgers()', () => {
       .mockResolvedValueOnce(makeResponse([]))          // page 5
       .mockResolvedValueOnce(makeResponse([]));         // page 6
 
-    const result = await adapter.fetchLedgers();
+    const result = await adapter.fetchLedgers('OFFICE_PAYMENT');
     expect(result).toHaveLength(51);
     expect(mockFetch).toHaveBeenCalledTimes(7); // 1 auth + 6 pages (1 Phase A + 5 Phase B)
   });
 
-  it('sends size and page in request body', async () => {
+  it('sends ledger_type, size and page in request body', async () => {
     const adapter = await authenticatedAdapter();
     mockFetch.mockResolvedValueOnce(makeResponse([]));
 
-    await adapter.fetchLedgers();
+    await adapter.fetchLedgers('OFFICE_PAYMENT');
 
     const [, init] = mockFetch.mock.calls[1] as [string, RequestInit];
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body['ledger_type']).toBe('OFFICE_PAYMENT');
     expect(body['size']).toBe(50);
     expect(body['page']).toBe(1);
+  });
+
+  it('passes start (date filter) when fromDate provided', async () => {
+    const adapter = await authenticatedAdapter();
+    mockFetch.mockResolvedValueOnce(makeResponse([]));
+
+    await adapter.fetchLedgers('CLIENT_TO_OFFICE', '2024-01-01');
+
+    const [, init] = mockFetch.mock.calls[1] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body['ledger_type']).toBe('CLIENT_TO_OFFICE');
+    expect(body['start']).toBe('2024-01-01');
   });
 
   it('increments page on subsequent requests', async () => {
@@ -129,29 +142,13 @@ describe('fetchLedgers()', () => {
       .mockResolvedValueOnce(makeResponse([]))          // page 5
       .mockResolvedValueOnce(makeResponse([]));         // page 6
 
-    await adapter.fetchLedgers();
+    await adapter.fetchLedgers('OFFICE_PAYMENT');
 
     // calls[0]=auth, calls[1]=page1, calls[2]=page2 (first in Phase B batch)
     const secondBody = JSON.parse(
       (mockFetch.mock.calls[2] as [string, RequestInit])[1].body as string,
     ) as Record<string, unknown>;
     expect(secondBody['page']).toBe(2);
-  });
-
-  it('discards records with irrelevant ledger types', async () => {
-    const adapter = await authenticatedAdapter();
-    const page = [
-      makeLedger({ type: 'OFFICE_PAYMENT' }),
-      makeLedger({ type: 'CLIENT_TO_OFFICE', invoice: 'inv-1' }),
-      makeLedger({ type: 'OFFICE_RECEIPT',   invoice: 'inv-2' }),
-      makeLedger({ type: 'CLIENT_RECEIPT' }),
-      makeLedger({ type: 'OPENING_BALANCE' }),
-      makeLedger({ type: 'TAX' }),
-    ];
-    mockFetch.mockResolvedValueOnce(makeResponse(page));
-
-    const result = await adapter.fetchLedgers();
-    expect(result).toHaveLength(3);
   });
 
   it('discards records whose matter is in archivedMatterIds', async () => {
@@ -164,7 +161,7 @@ describe('fetchLedgers()', () => {
     mockFetch.mockResolvedValueOnce(makeResponse(page));
 
     const archivedMatterIds = new Set(['archived-matter']);
-    const result = await adapter.fetchLedgers('', archivedMatterIds);
+    const result = await adapter.fetchLedgers('OFFICE_PAYMENT', '', archivedMatterIds);
     expect(result).toHaveLength(2);
   });
 
@@ -172,15 +169,25 @@ describe('fetchLedgers()', () => {
     const adapter = await authenticatedAdapter();
     const fromDate = '2024-03-01';
     const page = [
-      makeLedger({ type: 'OFFICE_PAYMENT', outstanding: 0, date: '2024-01-15' }),          // old + recovered → discard
-      makeLedger({ type: 'OFFICE_PAYMENT', outstanding: 0, date: '2024-03-15' }),          // recent → keep
-      makeLedger({ type: 'OFFICE_PAYMENT', outstanding: 500, date: '2024-01-15' }),        // still outstanding → keep
-      makeLedger({ type: 'CLIENT_TO_OFFICE', outstanding: 0, date: '2024-01-15', invoice: 'inv-1' }), // not OFFICE_PAYMENT → keep
+      makeLedger({ type: 'OFFICE_PAYMENT', outstanding: 0, date: '2024-01-15' }),    // old + recovered → discard
+      makeLedger({ type: 'OFFICE_PAYMENT', outstanding: 0, date: '2024-03-15' }),    // recent → keep
+      makeLedger({ type: 'OFFICE_PAYMENT', outstanding: 500, date: '2024-01-15' }),  // still outstanding → keep
     ];
     mockFetch.mockResolvedValueOnce(makeResponse(page));
 
-    const result = await adapter.fetchLedgers(fromDate);
-    expect(result).toHaveLength(3);
+    const result = await adapter.fetchLedgers('OFFICE_PAYMENT', fromDate);
+    expect(result).toHaveLength(2);
+  });
+
+  it('does not apply old-recovered filter for non-OFFICE_PAYMENT types', async () => {
+    const adapter = await authenticatedAdapter();
+    const page = [
+      makeLedger({ type: 'CLIENT_TO_OFFICE', outstanding: 0, date: '2020-01-01', invoice: 'inv-1' }),
+    ];
+    mockFetch.mockResolvedValueOnce(makeResponse(page));
+
+    const result = await adapter.fetchLedgers('CLIENT_TO_OFFICE', '2024-03-01');
+    expect(result).toHaveLength(1);
   });
 
   it('does not apply old-recovered filter when fromDate is empty', async () => {
@@ -190,7 +197,7 @@ describe('fetchLedgers()', () => {
     ];
     mockFetch.mockResolvedValueOnce(makeResponse(page));
 
-    const result = await adapter.fetchLedgers(); // no fromDate → no cutoff applied
+    const result = await adapter.fetchLedgers('OFFICE_PAYMENT'); // no fromDate → no cutoff applied
     expect(result).toHaveLength(1);
   });
 });

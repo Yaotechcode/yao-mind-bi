@@ -405,11 +405,31 @@ function createMockFetch(opts: {
       return jsonResponse({ unpaid: 1200, paid: 0, total: 1200 });
     }
 
-    // ── Ledgers (page POST — root-level array) ────────────────────────────────
+    // ── Ledgers (page POST — root-level array, server-side ledger_type filter) ──
     if (pathname === '/ledgers/search' && method === 'POST') {
       const body = JSON.parse(init?.body as string) as Record<string, unknown>;
       const page = Number(body['page'] ?? 1);
-      return jsonResponse(page === 1 ? ledgers : []);
+      const ledgerType = body['ledger_type'] as string | undefined;
+      const filtered = ledgerType
+        ? (ledgers as Array<{ type: string }>).filter((l) => l.type === ledgerType)
+        : ledgers;
+      return jsonResponse(page === 1 ? filtered : []);
+    }
+
+    // ── Time entries summary (post-fetch validation) ──────────────────────────
+    if (pathname === '/time-entries/summary' && method === 'POST') {
+      return jsonResponse({
+        total_duration_hours:   0,
+        total_duration_minutes: 0,
+        total_units:            0,
+        total_days:             0,
+        total_value:            0,
+      });
+    }
+
+    // ── Targets (current month — non-fatal if 404) ────────────────────────────
+    if (pathname.startsWith('/targets/') && method === 'GET') {
+      return jsonResponse(null, 404);
     }
 
     // ── Tasks (page GET) ──────────────────────────────────────────────────────
@@ -493,9 +513,13 @@ describe('Test 1: fetchAll() returns all expected datasets', () => {
     const mockFetch = createMockFetch({});
     const adapter = await makeAuthenticatedAdapter(mockFetch);
 
-    // fetchAll no longer includes ledgers — call separately
-    const rawLedgers = await adapter.fetchLedgers();
-    const ledgers = adapter.routeLedgers(rawLedgers);
+    // Parallel triple-fetch — one call per LedgerEntryType, merged client-side
+    const [office, c2o, receipts] = await Promise.all([
+      adapter.fetchLedgers('OFFICE_PAYMENT'),
+      adapter.fetchLedgers('CLIENT_TO_OFFICE'),
+      adapter.fetchLedgers('OFFICE_RECEIPT'),
+    ]);
+    const ledgers = adapter.routeLedgers([...office, ...c2o, ...receipts]);
 
     // OFFICE_PAYMENT → disbursements
     expect(ledgers.disbursements).toHaveLength(1);
@@ -657,7 +681,7 @@ describe('Test 5: ledger routing — OFFICE_PAYMENT to disbursements', () => {
     const mockFetch = createMockFetch({ ledgers: [RAW_LEDGER_DISBURSEMENT] });
     const adapter = await makeAuthenticatedAdapter(mockFetch);
 
-    const rawLedgers = await adapter.fetchLedgers();
+    const rawLedgers = await adapter.fetchLedgers("OFFICE_PAYMENT");
     const routed = adapter.routeLedgers(rawLedgers);
 
     expect(routed.disbursements).toHaveLength(1);
@@ -687,7 +711,7 @@ describe('Test 6: ledger routing — CLIENT_TO_OFFICE with invoice → invoicePa
     const mockFetch = createMockFetch({ ledgers: [RAW_LEDGER_INVOICE_PAYMENT] });
     const adapter = await makeAuthenticatedAdapter(mockFetch);
 
-    const rawLedgers = await adapter.fetchLedgers();
+    const rawLedgers = await adapter.fetchLedgers('CLIENT_TO_OFFICE');
     const routed = adapter.routeLedgers(rawLedgers);
 
     expect(routed.invoicePayments).toHaveLength(1);
@@ -720,7 +744,7 @@ describe('Test 7: ledger routing — record with both invoice AND disbursements[
     const mockFetch = createMockFetch({ ledgers: [RAW_LEDGER_BOTH] });
     const adapter = await makeAuthenticatedAdapter(mockFetch);
 
-    const rawLedgers = await adapter.fetchLedgers();
+    const rawLedgers = await adapter.fetchLedgers('CLIENT_TO_OFFICE');
     const routed = adapter.routeLedgers(rawLedgers);
 
     const idsInInvoicePayments = routed.invoicePayments.map((l) => l._id);
@@ -731,7 +755,7 @@ describe('Test 7: ledger routing — record with both invoice AND disbursements[
     const mockFetch = createMockFetch({ ledgers: [RAW_LEDGER_BOTH] });
     const adapter = await makeAuthenticatedAdapter(mockFetch);
 
-    const rawLedgers = await adapter.fetchLedgers();
+    const rawLedgers = await adapter.fetchLedgers('CLIENT_TO_OFFICE');
     const routed = adapter.routeLedgers(rawLedgers);
 
     const idsInRecoveries = routed.disbursementRecoveries.map((l) => l._id);
@@ -916,8 +940,8 @@ describe('Test 10: full PullOrchestrator.run() with mocked API', () => {
     expect(result.stats.tasks).toBe(1);
     // contacts always 0 while contacts fetch is disabled
     expect(result.stats.contacts).toBe(0);
-    // disbursements always 0 while ledger fetch is disabled
-    expect(result.stats.disbursements).toBe(0);
+    // disbursements: parallel triple-fetch routes the OFFICE_PAYMENT fixture
+    expect(result.stats.disbursements).toBe(1);
   });
 
   it('returns pulledAt as an ISO string', async () => {

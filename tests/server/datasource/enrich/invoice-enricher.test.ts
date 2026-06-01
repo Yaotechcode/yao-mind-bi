@@ -7,7 +7,10 @@ import {
   aggregateInvoicesByFeeEarner,
 } from '../../../../src/server/datasource/enrich/invoice-enricher.js';
 
-import type { NormalisedInvoice } from '../../../../src/server/datasource/normalise/types.js';
+import type {
+  NormalisedInvoice,
+  NormalisedTimeEntry,
+} from '../../../../src/server/datasource/normalise/types.js';
 import type { YaoLedger } from '../../../../src/server/datasource/types.js';
 
 // =============================================================================
@@ -21,9 +24,14 @@ function makeInvoice(o: Partial<NormalisedInvoice> = {}): NormalisedInvoice {
     invoiceDate: '2024-03-01',
     dueDate: '2024-03-31',
     subtotal: 1000,
+    billingAmount: 0,
+    billableEntries: 0,
+    feeEarnerRevenue: 0,
     totalDisbursements: 0,
     totalOtherFees: 0,
     totalFirmFees: 1000,
+    timeEntriesOverrideValue: 0,
+    timeEntryIds: [],
     writeOff: 0,
     total: 1000,
     outstanding: 0,
@@ -61,6 +69,37 @@ function makeLedger(o: Partial<YaoLedger> = {}): YaoLedger {
     outstanding: 0,
     date: '2024-03-15',
     invoice: 'inv-1',
+    ...o,
+  };
+}
+
+function makeTimeEntry(o: Partial<NormalisedTimeEntry> = {}): NormalisedTimeEntry {
+  return {
+    _id: 'te-1',
+    description: '',
+    activityType: null,
+    durationHours: 1,
+    isChargeable: true,
+    doNotBill: false,
+    rate: 0,
+    clientRate: null,
+    units: 10,
+    billable: 1000,
+    writeOff: 0,
+    recordedValue: 1000,
+    status: 'ACTIVE',
+    entryStatus: 'ACTIVE',
+    lawyerId: 'att-1',
+    lawyerName: 'Alice Smith',
+    lawyerDefaultRate: null,
+    lawyerStatus: null,
+    lawyerIntegrationId: null,
+    matterId: 'matter-1',
+    matterNumber: 1001,
+    invoiceId: 'inv-1',
+    date: '2024-03-01',
+    createdAt: '',
+    updatedAt: '',
     ...o,
   };
 }
@@ -285,47 +324,169 @@ describe('aggregateInvoicesByMatter()', () => {
 // =============================================================================
 
 describe('aggregateInvoicesByFeeEarner()', () => {
-  it('groups invoices by responsibleLawyerId', () => {
+  it('groups invoices by responsibleLawyerId (Branch 3 fixed/other fees)', () => {
     const invoices = [
-      makeInvoice({ _id: 'inv-1', responsibleLawyerId: 'att-1', status: 'PAID' }),
-      makeInvoice({ _id: 'inv-2', responsibleLawyerId: 'att-2', status: 'ISSUED' }),
-      makeInvoice({ _id: 'inv-3', responsibleLawyerId: 'att-1', status: 'PAID' }),
+      makeInvoice({ _id: 'inv-1', responsibleLawyerId: 'att-1', status: 'PAID', billingAmount: 1000 }),
+      makeInvoice({ _id: 'inv-2', responsibleLawyerId: 'att-2', status: 'ISSUED', billingAmount: 500 }),
+      makeInvoice({ _id: 'inv-3', responsibleLawyerId: 'att-1', status: 'PAID', billingAmount: 250 }),
     ];
-    const result = aggregateInvoicesByFeeEarner(invoices);
+    const result = aggregateInvoicesByFeeEarner(invoices, []);
     expect(result.size).toBe(2);
     expect(result.get('att-1')?.invoiceCount).toBe(2);
     expect(result.get('att-2')?.invoiceCount).toBe(1);
   });
 
-  it('sums financial fields per fee earner', () => {
+  it('sums invoice-level financials (outstanding, paid) per fee earner', () => {
     const invoices = [
-      makeInvoice({ _id: 'inv-1', responsibleLawyerId: 'att-1', status: 'PAID', total: 800, outstanding: 0, paid: 800 }),
-      makeInvoice({ _id: 'inv-2', responsibleLawyerId: 'att-1', status: 'ISSUED', total: 600, outstanding: 400, paid: 200 }),
+      makeInvoice({ _id: 'inv-1', responsibleLawyerId: 'att-1', status: 'PAID', outstanding: 0, paid: 800 }),
+      makeInvoice({ _id: 'inv-2', responsibleLawyerId: 'att-1', status: 'ISSUED', outstanding: 400, paid: 200 }),
     ];
-    const result = aggregateInvoicesByFeeEarner(invoices);
+    const result = aggregateInvoicesByFeeEarner(invoices, []);
     const summary = result.get('att-1')!;
-    expect(summary.invoicedNetBilling).toBe(1400);
     expect(summary.invoicedOutstanding).toBe(400);
     expect(summary.invoicedPaid).toBe(1000);
   });
 
   it('excludes DRAFT invoices', () => {
     const invoices = [
-      makeInvoice({ responsibleLawyerId: 'att-1', status: 'DRAFT' }),
+      makeInvoice({ responsibleLawyerId: 'att-1', status: 'DRAFT', billingAmount: 1000 }),
     ];
-    const result = aggregateInvoicesByFeeEarner(invoices);
+    const result = aggregateInvoicesByFeeEarner(invoices, []);
     expect(result.size).toBe(0);
   });
 
-  it('excludes invoices with no responsibleLawyerId', () => {
+  it('excludes invoices with no responsibleLawyerId from invoice-level branches', () => {
     const invoices = [
-      makeInvoice({ responsibleLawyerId: null, status: 'PAID' }),
+      makeInvoice({ responsibleLawyerId: null, status: 'PAID', billingAmount: 1000 }),
     ];
-    const result = aggregateInvoicesByFeeEarner(invoices);
+    const result = aggregateInvoicesByFeeEarner(invoices, []);
     expect(result.size).toBe(0);
   });
 
   it('returns empty map for empty input', () => {
-    expect(aggregateInvoicesByFeeEarner([])).toEqual(new Map());
+    expect(aggregateInvoicesByFeeEarner([], [])).toEqual(new Map());
+  });
+
+  // --- Branch 1: time entry billable values, attributed to the assignee ---
+
+  it('attributes time entry billable to the assignee, NOT the responsible solicitor', () => {
+    // Invoice responsible = att-1, but att-2 did £6,000 of the work.
+    const invoices = [
+      makeInvoice({ _id: 'inv-1', responsibleLawyerId: 'att-1', status: 'ISSUED', billingAmount: 0 }),
+    ];
+    const timeEntries = [
+      makeTimeEntry({ _id: 'te-1', invoiceId: 'inv-1', lawyerId: 'att-2', billable: 6000 }),
+    ];
+    const result = aggregateInvoicesByFeeEarner(invoices, timeEntries);
+    expect(result.get('att-2')?.invoicedFromTimeEntries).toBe(6000);
+    expect(result.get('att-1')?.invoicedFromTimeEntries ?? 0).toBe(0);
+  });
+
+  it('ignores time entries that are not yet invoiced (invoiceId null)', () => {
+    const invoices = [makeInvoice({ _id: 'inv-1', responsibleLawyerId: 'att-1', status: 'ISSUED', billingAmount: 0 })];
+    const timeEntries = [makeTimeEntry({ _id: 'te-1', invoiceId: null, lawyerId: 'att-2', billable: 6000 })];
+    const result = aggregateInvoicesByFeeEarner(invoices, timeEntries);
+    expect(result.get('att-2')?.invoicedFromTimeEntries ?? 0).toBe(0);
+  });
+
+  it('ignores time entries whose invoice is not in a billable status', () => {
+    const invoices = [makeInvoice({ _id: 'inv-1', responsibleLawyerId: 'att-1', status: 'DRAFT', billingAmount: 0 })];
+    const timeEntries = [makeTimeEntry({ _id: 'te-1', invoiceId: 'inv-1', lawyerId: 'att-2', billable: 6000 })];
+    const result = aggregateInvoicesByFeeEarner(invoices, timeEntries);
+    expect(result.size).toBe(0);
+  });
+
+  it('does not subtract write_off from billable (no double-counting)', () => {
+    const invoices = [makeInvoice({ _id: 'inv-1', responsibleLawyerId: 'att-1', status: 'ISSUED', billingAmount: 0 })];
+    const timeEntries = [makeTimeEntry({ _id: 'te-1', invoiceId: 'inv-1', lawyerId: 'att-2', billable: 4000, writeOff: 1000 })];
+    const result = aggregateInvoicesByFeeEarner(invoices, timeEntries);
+    expect(result.get('att-2')?.invoicedFromTimeEntries).toBe(4000);
+  });
+
+  // --- Branch 3: fixed fees and other fee lines, attributed to the solicitor ---
+
+  it('attributes a fixed-fee invoice (no time entries) to the solicitor', () => {
+    const invoices = [
+      makeInvoice({ _id: 'inv-1', responsibleLawyerId: 'att-1', status: 'ISSUED', billingAmount: 5000, billableEntries: 0 }),
+    ];
+    const result = aggregateInvoicesByFeeEarner(invoices, []);
+    expect(result.get('att-1')?.invoicedFixedAndOtherFees).toBe(5000);
+    expect(result.get('att-1')?.invoicedNetBilling).toBe(5000);
+  });
+
+  it('includes total_other_fees in Branch 3', () => {
+    const invoices = [
+      makeInvoice({ _id: 'inv-1', responsibleLawyerId: 'att-1', status: 'PAID', billingAmount: 1000, totalOtherFees: 250 }),
+    ];
+    const result = aggregateInvoicesByFeeEarner(invoices, []);
+    expect(result.get('att-1')?.invoicedFixedAndOtherFees).toBe(1250);
+  });
+
+  // --- Branch 2: override uplift, attributed to the solicitor ---
+
+  it('attributes override uplift above the sum of entry values to the solicitor', () => {
+    // billable_entries (£) overridden to 10000; entries sum to 6000 → uplift 4000.
+    const invoices = [
+      makeInvoice({
+        _id: 'inv-1', responsibleLawyerId: 'att-1', status: 'ISSUED', billingAmount: 0,
+        timeEntriesOverrideValue: 10000, billableEntries: 10000, timeEntryIds: ['te-1', 'te-2'],
+      }),
+    ];
+    const timeEntries = [
+      makeTimeEntry({ _id: 'te-1', invoiceId: 'inv-1', lawyerId: 'att-2', billable: 4000 }),
+      makeTimeEntry({ _id: 'te-2', invoiceId: 'inv-1', lawyerId: 'att-3', billable: 2000 }),
+    ];
+    const result = aggregateInvoicesByFeeEarner(invoices, timeEntries);
+    expect(result.get('att-1')?.invoicedOverrideUplift).toBe(4000);
+    // Branch 1 still attributes the underlying entries to their assignees.
+    expect(result.get('att-2')?.invoicedFromTimeEntries).toBe(4000);
+    expect(result.get('att-3')?.invoicedFromTimeEntries).toBe(2000);
+  });
+
+  it('floors override uplift at 0 (downward overrides ignored)', () => {
+    const invoices = [
+      makeInvoice({
+        _id: 'inv-1', responsibleLawyerId: 'att-1', status: 'ISSUED', billingAmount: 0,
+        timeEntriesOverrideValue: 5000, billableEntries: 5000, timeEntryIds: ['te-1'],
+      }),
+    ];
+    const timeEntries = [makeTimeEntry({ _id: 'te-1', invoiceId: 'inv-1', lawyerId: 'att-2', billable: 8000 })];
+    const result = aggregateInvoicesByFeeEarner(invoices, timeEntries);
+    expect(result.get('att-1')?.invoicedOverrideUplift).toBe(0);
+  });
+
+  // --- WRITTEN_OFF inclusion ---
+
+  it('includes WRITTEN_OFF invoices in attribution', () => {
+    const invoices = [
+      makeInvoice({ _id: 'inv-1', responsibleLawyerId: 'att-1', status: 'WRITTEN_OFF', billingAmount: 3000 }),
+    ];
+    const timeEntries = [makeTimeEntry({ _id: 'te-1', invoiceId: 'inv-1', lawyerId: 'att-2', billable: 1500 })];
+    const result = aggregateInvoicesByFeeEarner(invoices, timeEntries);
+    expect(result.get('att-1')?.invoicedFixedAndOtherFees).toBe(3000);
+    expect(result.get('att-2')?.invoicedFromTimeEntries).toBe(1500);
+  });
+
+  // --- invoicedNetBilling = sum of the three branches ---
+
+  it('invoicedNetBilling equals the sum of the three component fields', () => {
+    const invoices = [
+      makeInvoice({
+        _id: 'inv-1', responsibleLawyerId: 'att-1', status: 'ISSUED',
+        billingAmount: 2000, totalOtherFees: 500,
+        timeEntriesOverrideValue: 12000, billableEntries: 12000, timeEntryIds: ['te-1'],
+      }),
+    ];
+    const timeEntries = [makeTimeEntry({ _id: 'te-1', invoiceId: 'inv-1', lawyerId: 'att-1', billable: 9000 })];
+    const result = aggregateInvoicesByFeeEarner(invoices, timeEntries);
+    const s = result.get('att-1')!;
+    // Branch 1 = 9000, Branch 2 = max(0, 12000-9000) = 3000, Branch 3 = 2500
+    expect(s.invoicedNetBilling).toBe(
+      s.invoicedFromTimeEntries + s.invoicedOverrideUplift + s.invoicedFixedAndOtherFees,
+    );
+    expect(s.invoicedFromTimeEntries).toBe(9000);
+    expect(s.invoicedOverrideUplift).toBe(3000);
+    expect(s.invoicedFixedAndOtherFees).toBe(2500);
+    expect(s.invoicedNetBilling).toBe(14500);
   });
 });

@@ -28,7 +28,9 @@ const CONNECT_ALLOWED_ROLES = new Set(['owner', 'admin']);
 const ConnectBodySchema = z.object({
   email:    z.string().email('email must be a valid email address'),
   password: z.string().min(1, 'password must not be empty'),
-  code:     z.number().int().optional(),
+  // The Yao API requires the per-firm MFA code at /attorneys/login, so it is
+  // mandatory here and stored alongside email/password.
+  code:     z.number({ required_error: 'code is required' }).int('code must be an integer'),
 });
 
 // =============================================================================
@@ -183,7 +185,7 @@ type LoginOutcome = LoginSuccess | LoginFailure;
 async function attemptYaoLogin(
   email: string,
   password: string,
-  code?: number,
+  code: number,
 ): Promise<LoginOutcome> {
   const baseUrl = process.env['YAO_API_BASE_URL'] ?? 'https://api.yao.legal';
 
@@ -191,9 +193,7 @@ async function attemptYaoLogin(
     const response = await fetch(`${baseUrl}/attorneys/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(
-        code !== undefined ? { email, password, code } : { email, password },
-      ),
+      body: JSON.stringify({ email, password, code }),
     });
 
     if (!response.ok) return { ok: false };

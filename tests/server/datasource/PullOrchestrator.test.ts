@@ -27,11 +27,17 @@ vi.mock('../../../src/server/services/pull-status-service.js', () => ({
 }));
 
 vi.mock('../../../src/server/datasource/enrich/wip-aggregator.js', () => ({
-  buildWipEnrichment: vi.fn().mockReturnValue({ byMatter: {}, byFeeEarner: {}, orphaned: [] }),
+  buildWipEnrichment: vi.fn().mockReturnValue({
+    byMatter:    new Map(),
+    byFeeEarner: new Map(),
+    orphaned:    [],
+    totalStats:  {},
+  }),
 }));
 
 vi.mock('../../../src/server/datasource/enrich/invoice-enricher.js', () => ({
-  enrichInvoicesWithDatePaid: vi.fn().mockReturnValue([]),
+  enrichInvoicesWithDatePaid: vi.fn().mockImplementation((invoices: unknown) => invoices ?? []),
+  aggregateInvoicesByMatter:  vi.fn().mockReturnValue(new Map()),
 }));
 
 vi.mock('../../../src/server/datasource/enrich/fee-earner-merger.js', () => ({
@@ -107,8 +113,17 @@ function makeAdapter(overrides: Partial<ReturnType<typeof makeAdapter>> = {}) {
       departmentMap: {},
       caseTypeMap:   {},
     }),
+    fetchTargets:        vi.fn().mockResolvedValue(null),
     fetchMatters:        vi.fn().mockResolvedValue([{ _id: 'm-1' }, { _id: 'm-2' }]),
     fetchTimeEntries:    vi.fn().mockResolvedValue([{ _id: 'te-1' }]),
+    fetchTimeEntrySummary: vi.fn().mockResolvedValue({
+      total_duration_hours:   0,
+      total_duration_minutes: 0,
+      total_units:            0,
+      total_days:             0,
+      total_value:            0,
+    }),
+    validateTimeEntryTotals: vi.fn().mockReturnValue({ ok: true, apiHours: 0, fetchedHours: 0, diffPct: null }),
     fetchInvoices:       vi.fn().mockResolvedValue([{ _id: 'inv-1' }]),
     fetchLedgers:        vi.fn().mockResolvedValue([]),
     fetchTasks:          vi.fn().mockResolvedValue([{ _id: 'task-1' }]),
@@ -295,11 +310,11 @@ describe('pull status stage tracking', () => {
     expect(stages).not.toContain('Storing enriched data');
   });
 
-  it('does NOT update stage to Fetching ledgers (disabled pending API type filter)', async () => {
+  it('updates stage to Fetching ledgers (parallel triple-fetch by ledger_type)', async () => {
     const { orchestrator } = makeOrchestrator();
     await orchestrator.run();
     const stages = vi.mocked(pullStatus.updatePullStage).mock.calls.map((c) => c[1]);
-    expect(stages).not.toContain('Fetching ledgers');
+    expect(stages).toContain('Fetching ledgers');
   });
 
   it('updates stage to Calculating KPIs', async () => {

@@ -49,6 +49,8 @@ import {
   clearRecalculationFlag,
 } from '../lib/mongodb-operations.js';
 import { getFirmConfig, getFeeEarnerOverrides } from '../services/config-service.js';
+import { aggregateInvoicesByFeeEarner } from '../datasource/enrich/invoice-enricher.js';
+import type { NormalisedInvoice, NormalisedTimeEntry } from '../datasource/normalise/types.js';
 import { buildSnapshotsFromKpiResults } from '../datasource/enrich/kpi-snapshot-builder.js';
 import { writeKpiSnapshots } from '../services/kpi-snapshot-service.js';
 import { scanForRiskFlags } from '../datasource/enrich/risk-scanner.js';
@@ -222,13 +224,17 @@ export class CalculationOrchestrator {
       // from the window-filtered records so that formula results respect the window.
       // Uses the same BILLABLE_STATUSES set as the main aggregation (WRITTEN_OFF included).
       const BILLABLE_STATUSES_WINDOW = new Set(['ISSUED', 'PAID', 'CREDITED', 'WRITTEN_OFF']);
-      const windowActiveIds = new Set<string>(
-        enrichedData.feeEarners.map((fe) => {
-          const r = fe as unknown as Record<string, unknown>;
-          return String(r['lawyerId'] ?? r['_id'] ?? '');
-        }).filter(Boolean),
+      // Per-fee-earner attribution from the window-filtered records uses the
+      // three-branch model (Branch 1: time entry billable by assignee; Branch 2:
+      // override uplift to the solicitor; Branch 3: fixed/other fees to the
+      // solicitor). This supersedes the old logic that attributed each invoice's
+      // whole feeEarnerRevenue to its responsibleLawyerId.
+      const windowFeeEarnerSummaries = aggregateInvoicesByFeeEarner(
+        enrichedData.invoices as unknown as NormalisedInvoice[],
+        enrichedData.timeEntries as unknown as NormalisedTimeEntry[],
       );
-      const filteredRevenueByLawyer = new Map<string, number>();
+      // Firm-level revenue keeps its existing definition (sum of feeEarnerRevenue
+      // across all billable invoices in the window) — independent of attribution.
       let windowFirmRevenue = 0;
       for (const inv of enrichedData.invoices) {
         const r = inv as unknown as Record<string, unknown>;
@@ -240,10 +246,6 @@ export class CalculationOrchestrator {
             - (typeof r['totalFirmFees'] === 'number' ? r['totalFirmFees'] : 0)
             - (typeof r['totalDisbursements'] === 'number' ? r['totalDisbursements'] : 0);
         windowFirmRevenue += feeRev;
-        const lawyerId = r['responsibleLawyerId'] != null ? String(r['responsibleLawyerId']) : null;
-        if (!lawyerId) continue;
-        if (windowActiveIds.size > 0 && !windowActiveIds.has(lawyerId)) continue; // skip disabled attorneys
-        filteredRevenueByLawyer.set(lawyerId, (filteredRevenueByLawyer.get(lawyerId) ?? 0) + feeRev);
       }
       const filteredChargeableHoursByLawyer = new Map<string, number>();
       const filteredTotalHoursByLawyer = new Map<string, number>();
@@ -266,7 +268,9 @@ export class CalculationOrchestrator {
         const id = String((fe as unknown as Record<string, unknown>)['lawyerId'] ?? (fe as unknown as Record<string, unknown>)['_id'] ?? '');
         return {
           ...fe,
-          invoicedRevenue: filteredRevenueByLawyer.get(id) ?? 0,
+          invoicedRevenue: windowFeeEarnerSummaries.get(id)?.invoicedNetBilling ?? 0,
+          invoicedOutstanding: windowFeeEarnerSummaries.get(id)?.invoicedOutstanding ?? 0,
+          invoicedCount: windowFeeEarnerSummaries.get(id)?.invoiceCount ?? 0,
           wipChargeableHours: filteredChargeableHoursByLawyer.get(id) ?? 0,
           wipTotalHours: filteredTotalHoursByLawyer.get(id) ?? 0,
         };
@@ -583,13 +587,25 @@ export class CalculationOrchestrator {
       (enrichedFeeEarnerRecords ?? []).map((r) => String(r['_id'] ?? '')).filter(Boolean),
     );
 
-    const invoicedRevenueByLawyer = new Map<string, number>();
+    const invoiceRecords = ((invoiceDoc?.records ?? []) as unknown[]) as Array<Record<string, unknown>>;
+
+    // Per-fee-earner attribution uses the three-branch model in
+    // aggregateInvoicesByFeeEarner (Branch 1: time entry `billable` by assignee —
+    // the fee earner who did the work; Branch 2: manual override uplift to the
+    // invoice solicitor; Branch 3: fixed/other fee lines to the solicitor). This
+    // SUPERSEDES the previous logic which attributed each invoice's entire
+    // feeEarnerRevenue to its responsibleLawyerId — wrong for multi-attorney matters.
+    const feeEarnerInvoiceSummaries = aggregateInvoicesByFeeEarner(
+      invoiceRecords as unknown as NormalisedInvoice[],
+      timeEntryRecords as unknown as NormalisedTimeEntry[],
+    );
+
+    // Firm-level total revenue keeps its existing definition (sum of
+    // feeEarnerRevenue across ALL billable invoices, regardless of attribution).
+    // Invoices for disabled/unknown solicitors are tracked for logging only.
     let unattributedRevenue = 0;
     let unattributedCount = 0;
-    let attributedCount = 0;
-    let firmInvoicedRevenue = 0; // sum across ALL BILLABLE_STATUSES invoices regardless of attribution
-
-    const invoiceRecords = ((invoiceDoc?.records ?? []) as unknown[]) as Array<Record<string, unknown>>;
+    let firmInvoicedRevenue = 0;
     for (const inv of invoiceRecords) {
       const status = typeof inv['status'] === 'string' ? inv['status'] : '';
       if (!BILLABLE_STATUSES.has(status)) continue;
@@ -604,24 +620,18 @@ export class CalculationOrchestrator {
       firmInvoicedRevenue += feeEarnerRevenue;
 
       const lawyerId = inv['responsibleLawyerId'] != null ? String(inv['responsibleLawyerId']) : null;
-      if (!lawyerId) continue;
-
-      if (activeAttorneyIds.size > 0 && !activeAttorneyIds.has(lawyerId)) {
-        // Invoice belongs to a disabled or unknown attorney — track separately, do NOT
-        // assign to any fee earner's invoicedRevenue to avoid polluting active earner totals.
+      if (!lawyerId || (activeAttorneyIds.size > 0 && !activeAttorneyIds.has(lawyerId))) {
         unattributedRevenue += feeEarnerRevenue;
         unattributedCount += 1;
-        continue;
       }
-
-      invoicedRevenueByLawyer.set(lawyerId, (invoicedRevenueByLawyer.get(lawyerId) ?? 0) + feeEarnerRevenue);
-      attributedCount += 1;
     }
 
-    const attributedRevenue = [...invoicedRevenueByLawyer.values()].reduce((a, b) => a + b, 0);
+    const attributedRevenue = [...feeEarnerInvoiceSummaries.values()]
+      .reduce((a, s) => a + s.invoicedNetBilling, 0);
     console.log(
-      `[orchestrator] revenue attribution — attributed: £${attributedRevenue.toFixed(0)} (${attributedCount} invoices), ` +
-      `unattributed: £${unattributedRevenue.toFixed(0)} (${unattributedCount} invoices, disabled/unknown attorneys)`,
+      `[orchestrator] revenue attribution (three-branch) — attributed: £${attributedRevenue.toFixed(0)} ` +
+      `across ${feeEarnerInvoiceSummaries.size} fee earners; firm total: £${firmInvoicedRevenue.toFixed(0)}; ` +
+      `unattributed solicitor revenue: £${unattributedRevenue.toFixed(0)} (${unattributedCount} invoices)`,
     );
 
     if ((enrichedFeeEarnerRecords?.length ?? 0) > 0) {
@@ -641,9 +651,9 @@ export class CalculationOrchestrator {
         wipNewestEntryDate: null,
         wipEntryCount: 0,
         recordingGapDays: null,
-        invoicedRevenue: invoicedRevenueByLawyer.get(String(r['_id'] ?? '')) ?? 0,
-        invoicedOutstanding: 0,
-        invoicedCount: 0,
+        invoicedRevenue: feeEarnerInvoiceSummaries.get(String(r['_id'] ?? ''))?.invoicedNetBilling ?? 0,
+        invoicedOutstanding: feeEarnerInvoiceSummaries.get(String(r['_id'] ?? ''))?.invoicedOutstanding ?? 0,
+        invoicedCount: feeEarnerInvoiceSummaries.get(String(r['_id'] ?? ''))?.invoiceCount ?? 0,
         // Pass through all extra fields (payModel, rate, grade, status, etc.)
         ...r,
         // Identity fields MUST come after ...r to guarantee they are set correctly.

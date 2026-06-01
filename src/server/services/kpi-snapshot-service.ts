@@ -147,45 +147,66 @@ export async function writeKpiSnapshots(
 // =============================================================================
 
 /**
+ * Page size for paginated reads — Supabase enforces a default 1000-row cap
+ * per request, so we loop with `range()` until a short page is returned.
+ */
+const READ_PAGE_SIZE = 1000;
+
+/**
  * Reads KPI snapshots for a firm with optional filters.
  * Results are ordered by entity_type → entity_name → kpi_key.
+ *
+ * Paginated under the hood — Supabase caps each request at 1000 rows by
+ * default, but a single firm can have 30k+ snapshots (e.g. 1 row per
+ * matter × ~10 KPI keys × 1000s of matters). The loop pages through with
+ * `range()` until a short page is returned.
  */
 export async function getKpiSnapshots(
   firmId: string,
   options: GetKpiSnapshotsOptions = {},
 ): Promise<KpiSnapshotRow[]> {
   const db = getServerClient();
+  const all: KpiSnapshotRow[] = [];
 
-  let query = db
-    .from('kpi_snapshots')
-    .select('*')
-    .eq('firm_id', firmId);
+  let from = 0;
+  while (true) {
+    let query = db
+      .from('kpi_snapshots')
+      .select('*')
+      .eq('firm_id', firmId);
 
-  if (options.entityType) {
-    query = query.eq('entity_type', options.entityType);
-  }
-  if (options.period) {
-    query = query.eq('period', options.period);
-  }
-  if (options.kpiKeys && options.kpiKeys.length > 0) {
-    query = query.in('kpi_key', options.kpiKeys);
-  }
-  if (options.entityIds && options.entityIds.length > 0) {
-    query = query.in('entity_id', options.entityIds);
+    if (options.entityType) {
+      query = query.eq('entity_type', options.entityType);
+    }
+    if (options.period) {
+      query = query.eq('period', options.period);
+    }
+    if (options.kpiKeys && options.kpiKeys.length > 0) {
+      query = query.in('kpi_key', options.kpiKeys);
+    }
+    if (options.entityIds && options.entityIds.length > 0) {
+      query = query.in('entity_id', options.entityIds);
+    }
+
+    const { data, error } = await query
+      .order('entity_type', { ascending: true })
+      .order('entity_name', { ascending: true })
+      .order('kpi_key', { ascending: true })
+      .range(from, from + READ_PAGE_SIZE - 1);
+
+    if (error) {
+      throw new Error(
+        `getKpiSnapshots: query failed for firm ${firmId}: ${error.message}`,
+      );
+    }
+
+    const page = (data ?? []) as KpiSnapshotRow[];
+    all.push(...page);
+    if (page.length < READ_PAGE_SIZE) break;
+    from += READ_PAGE_SIZE;
   }
 
-  const { data, error } = await query
-    .order('entity_type', { ascending: true })
-    .order('entity_name', { ascending: true })
-    .order('kpi_key', { ascending: true });
-
-  if (error) {
-    throw new Error(
-      `getKpiSnapshots: query failed for firm ${firmId}: ${error.message}`,
-    );
-  }
-
-  return (data ?? []) as KpiSnapshotRow[];
+  return all;
 }
 
 /**

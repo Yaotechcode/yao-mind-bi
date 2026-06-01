@@ -34,6 +34,8 @@ import type {
   RoutedLedgers,
   YaoTask,
   YaoContact,
+  YaoTargetsFirm,
+  YaoTimeEntrySummary,
   AttorneyMap,
   DepartmentMap,
   CaseTypeMap,
@@ -574,20 +576,22 @@ export class DataSourceAdapter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Fetches all attorneys (active, pending, and disabled — needed for historical data).
-   * Prunes to keep only fields needed for KPI calculation.
+   * Fetches all attorneys (active, pending, and disabled).
+   * Disabled attorneys are kept so that historical time entries, invoices, and
+   * matters linked to former employees can still be resolved against the
+   * attorneyMap. Active-only filtering is applied at display time, not here.
    */
   async fetchAttorneys(): Promise<YaoAttorney[]> {
     const raw = await this.request<Record<string, unknown>[]>('GET', '/attorneys');
     const pruned = pruneArray(raw, ATTORNEY_KEEP_FIELDS) as unknown as YaoAttorney[];
-    const active = pruned.filter(
+    const activeCount = pruned.filter(
       (a) => (a.status as string)?.toLowerCase() === 'active'
-    );
+    ).length;
     console.log(
-      `[fetchAttorneys] total=${pruned.length} active=${active.length} ` +
-      `disabled=${pruned.length - active.length}`
+      `[fetchAttorneys] total=${pruned.length} active=${activeCount} ` +
+      `disabled=${pruned.length - activeCount}`
     );
-    return active;
+    return pruned;
   }
 
   /**
@@ -604,6 +608,30 @@ export class DataSourceAdapter {
   async fetchCaseTypes(): Promise<YaoCaseType[]> {
     const raw = await this.request<Record<string, unknown>[]>('GET', '/case-types/active');
     return pruneArray(raw, CASE_TYPE_KEEP_FIELDS) as unknown as YaoCaseType[];
+  }
+
+  /**
+   * Fetches firm-wide targets configuration for a given competence (YYYY-MM month).
+   *
+   * Returns null when targets are not configured (404) or any other error occurs —
+   * targets are an optional enrichment that partially replaces the fee earner CSV
+   * for utilisation calculations. Salary, NI, and pension still require CSV.
+   *
+   * Provides per-attorney `work_hours_per_day` + `non_chargeable_ratio` and
+   * firm-wide `workday_rules.excluded_dates` (bank holidays, firm closures).
+   */
+  async fetchTargets(competence: string): Promise<YaoTargetsFirm | null> {
+    try {
+      return await this.request<YaoTargetsFirm>('GET', `/targets/${competence}`);
+    } catch (err) {
+      if (err instanceof YaoApiError && err.statusCode === 404) {
+        console.log(`[fetchTargets] no targets configured for competence ${competence}`);
+        return null;
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[fetchTargets] failed for ${competence}: ${msg}`);
+      return null;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -673,12 +701,28 @@ export class DataSourceAdapter {
    * Fetches time entries via page-based pagination (POST /time-entries/search).
    * Excludes CONSOLIDATED, CONSOLIDATION_TARGET, and DELETED records.
    * Entries with no status field are included — the API omits status on valid entries.
-   * Status is filtered on raw records before pruning (status is not in the pruned shape).
-   * @param fromDate  Optional ISO date string ('YYYY-MM-DD') to limit results to records on/after this date.
+   *
+   * Completeness check: when `attorneyIds` is provided, builds a Set of unique
+   * `assignee._id` values from the general fetch and identifies attorneys with
+   * zero returned entries. For each, issues a targeted `assignee`-filtered query
+   * in parallel and merges the results, deduplicating by entry `_id`. This works
+   * around a known Yao API edge case where the unfiltered query misses entries
+   * for some attorneys (e.g. Ben Haulkham, Carla Fishlock).
+   *
+   * Summary validation: after pagination + completeness, calls
+   * POST /time-entries/summary with the same `start` filter and warns when the
+   * fetched total hours diverge from the server-computed total by > 1 % — a
+   * silent pagination failure detector.
+   *
+   * @param fromDate     Optional ISO date string ('YYYY-MM-DD'); maps to `start`.
+   * @param attorneyIds  Optional list of attorney _ids for completeness checking.
    */
-  async fetchTimeEntries(fromDate?: string): Promise<YaoTimeEntry[]> {
+  async fetchTimeEntries(
+    fromDate?: string,
+    attorneyIds?: string[],
+  ): Promise<YaoTimeEntry[]> {
     const body: Record<string, unknown> = {};
-    if (fromDate) body['date_from'] = fromDate;
+    if (fromDate) body['start'] = fromDate;
     const raw = await this.parallelPaginatePost<Record<string, unknown>>(
       '/time-entries/search',
       body,
@@ -686,9 +730,61 @@ export class DataSourceAdapter {
       50,
       3, // batchSize=3: reduces concurrent load on later pages (400+)
     );
-    // Exclude only explicitly bad statuses. Entries with no status are valid.
+
+    // -- Completeness check: targeted assignee fetches for attorneys with 0 entries
+    if (attorneyIds && attorneyIds.length > 0) {
+      const seenAssignees = new Set<string>();
+      for (const e of raw) {
+        const assignee = e['assignee'] as Record<string, unknown> | null | undefined;
+        const aid = assignee?.['_id'];
+        if (typeof aid === 'string') seenAssignees.add(aid);
+      }
+      const missing = attorneyIds.filter((id) => !seenAssignees.has(id));
+      if (missing.length > 0) {
+        console.log(
+          `[fetchTimeEntries] completeness: ${missing.length}/${attorneyIds.length} ` +
+          `attorneys with zero entries in general fetch — running targeted queries`,
+        );
+        const targetedResults = await Promise.all(
+          missing.map(async (aid): Promise<Record<string, unknown>[]> => {
+            const targetedBody: Record<string, unknown> = { assignee: aid };
+            if (fromDate) targetedBody['start'] = fromDate;
+            try {
+              return await this.parallelPaginatePost<Record<string, unknown>>(
+                '/time-entries/search',
+                targetedBody,
+                'result',
+                50,
+                3,
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              console.warn(`[fetchTimeEntries] targeted fetch for ${aid} failed: ${msg}`);
+              return [];
+            }
+          }),
+        );
+        const seenIds = new Set(raw.map((e) => e['_id'] as string));
+        let added = 0;
+        for (const list of targetedResults) {
+          for (const t of list) {
+            const tid = t['_id'] as string;
+            if (!seenIds.has(tid)) {
+              raw.push(t);
+              seenIds.add(tid);
+              added++;
+            }
+          }
+        }
+        console.log(
+          `[fetchTimeEntries] completeness: added ${added} entries via ${missing.length} targeted queries`,
+        );
+      }
+    }
+
+    // -- Status filter (CONSOLIDATED, CONSOLIDATION_TARGET, DELETED)
     const EXCLUDED_STATUSES = new Set(['CONSOLIDATED', 'CONSOLIDATION_TARGET', 'DELETED']);
-    const included = raw.filter(e => {
+    const included = raw.filter((e) => {
       const status = e['status'];
       if (status === undefined || status === null || status === '') return true;
       return !EXCLUDED_STATUSES.has(String(status));
@@ -699,8 +795,48 @@ export class DataSourceAdapter {
       `[fetchTimeEntries] fetched ${raw.length} total entries across ~${pageCount} pages ` +
       `(${included.length} included, ${excluded} excluded as CONSOLIDATED/DELETED)`,
     );
+
     return pruneArray(included, TIME_ENTRY_KEEP_FIELDS)
-      .map(e => stripNestedSensitiveFields(e)) as unknown as YaoTimeEntry[];
+      .map((e) => stripNestedSensitiveFields(e)) as unknown as YaoTimeEntry[];
+  }
+
+  /**
+   * Fetches time entry summary totals for the firm using the same filters
+   * as fetchTimeEntries(). Used by PullOrchestrator as a post-fetch validation
+   * step to detect silent pagination failures.
+   */
+  async fetchTimeEntrySummary(fromDate?: string): Promise<YaoTimeEntrySummary> {
+    const body: Record<string, unknown> = {};
+    if (fromDate) body['start'] = fromDate;
+    return this.request<YaoTimeEntrySummary>('POST', '/time-entries/summary', { body });
+  }
+
+  /**
+   * Compares the sum of fetched entries' hours against the firm-wide summary
+   * total returned by POST /time-entries/summary for the same filter window.
+   * Logs OK and returns when within 1 %; warns and pushes to _warnings otherwise.
+   */
+  validateTimeEntryTotals(
+    fetchedHours: number,
+    summary: YaoTimeEntrySummary,
+  ): { ok: boolean; apiHours: number; fetchedHours: number; diffPct: number | null } {
+    const apiHours = summary.total_duration_hours ?? 0;
+    if (apiHours <= 0) {
+      return { ok: true, apiHours, fetchedHours, diffPct: null };
+    }
+    const diffPct = (Math.abs(fetchedHours - apiHours) / apiHours) * 100;
+    if (diffPct > 1) {
+      const msg =
+        `time-entries summary mismatch: API ${apiHours.toFixed(1)}h vs fetched ${fetchedHours.toFixed(1)}h ` +
+        `(${diffPct.toFixed(1)}% gap)`;
+      console.warn(`[validateTimeEntryTotals] WARNING: ${msg}`);
+      this._warnings.push(msg);
+      return { ok: false, apiHours, fetchedHours, diffPct };
+    }
+    console.log(
+      `[validateTimeEntryTotals] OK: fetched ${fetchedHours.toFixed(1)}h ≈ API ${apiHours.toFixed(1)}h`,
+    );
+    return { ok: true, apiHours, fetchedHours, diffPct };
   }
 
   // ---------------------------------------------------------------------------
@@ -715,7 +851,7 @@ export class DataSourceAdapter {
    */
   async fetchInvoices(fromDate?: string): Promise<YaoInvoice[]> {
     const body: Record<string, unknown> = {};
-    if (fromDate) body['date_from'] = fromDate;
+    if (fromDate) body['start'] = fromDate;
     const raw = await this.parallelPaginatePost<Record<string, unknown>>(
       '/invoices/search',
       body,
@@ -738,47 +874,47 @@ export class DataSourceAdapter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Fetches ledger records via page-based pagination with client-side filtering applied
-   * per page to reduce peak memory usage.
+   * Fetches ledger records of a single LedgerEntryType via page-based pagination.
    *
-   * Filters applied in order after each page is pruned:
-   *   1. Type filter  — keep only OFFICE_PAYMENT, CLIENT_TO_OFFICE, OFFICE_RECEIPT
-   *   2. Archived matter filter — discard records whose matter is in archivedMatterIds
-   *   3. Old-recovered filter — for OFFICE_PAYMENT only: discard if outstanding=0 AND date < fromDate
+   * Server-side filter via `ledger_type` (single-value enum) reduces the result
+   * set by ~66 % per call and removes the need for client-side type filtering.
+   * Callers run this method three times in parallel — once for OFFICE_PAYMENT,
+   * once for CLIENT_TO_OFFICE, once for OFFICE_RECEIPT — then merge results.
    *
-   * Logs reduction statistics after all pages complete.
+   * Client-side filters retained:
+   *   1. Archived matter filter — discard records whose matter is in archivedMatterIds
+   *   2. Old-recovered filter — for OFFICE_PAYMENT only: discard if outstanding=0 AND date < fromDate
    *
-   * @param fromDate          ISO date string ('YYYY-MM-DD'). Passed as date_from to the API and
+   * @param ledgerType        LedgerEntryType to fetch (server-side filter)
+   * @param fromDate          ISO date string ('YYYY-MM-DD'). Passed as `start` to the API and
    *                          used as the cutoff for the old-recovered filter. Defaults to '' (no cutoff).
    * @param archivedMatterIds Set of matter._id values for archived matters to exclude.
    */
   async fetchLedgers(
+    ledgerType: 'OFFICE_PAYMENT' | 'CLIENT_TO_OFFICE' | 'OFFICE_RECEIPT',
     fromDate: string = '',
     archivedMatterIds: Set<string> = new Set(),
   ): Promise<YaoLedger[]> {
-    const KEPT_TYPES = new Set(['OFFICE_PAYMENT', 'CLIENT_TO_OFFICE', 'OFFICE_RECEIPT']);
     const LIMIT = 50;
     const BATCH_SIZE = 5;
 
-    const requestBody: Record<string, unknown> = {};
-    if (fromDate) requestBody['date_from'] = fromDate;
+    const requestBody: Record<string, unknown> = { ledger_type: ledgerType };
+    if (fromDate) requestBody['start'] = fromDate;
 
     let total = 0;
-    let typeDiscarded = 0;
     let archivedDiscarded = 0;
     let oldRecoveredDiscarded = 0;
     const all: YaoLedger[] = [];
 
-    /** Prune then apply all three client-side filters. Mutates the counters. */
+    /** Prune then apply the two client-side filters. Mutates the counters. */
     const filterPage = (raw: Record<string, unknown>[]): YaoLedger[] => {
       const pruned = pruneArray(raw, LEDGER_KEEP_FIELDS) as unknown as YaoLedger[];
       total += raw.length;
       const kept: YaoLedger[] = [];
       for (const r of pruned) {
-        if (!KEPT_TYPES.has(r.type)) { typeDiscarded++; continue; }
         if (r.matter?._id && archivedMatterIds.has(r.matter._id)) { archivedDiscarded++; continue; }
         if (
-          r.type === 'OFFICE_PAYMENT' &&
+          ledgerType === 'OFFICE_PAYMENT' &&
           r.outstanding === 0 &&
           fromDate !== '' &&
           r.date < fromDate
@@ -815,7 +951,7 @@ export class DataSourceAdapter {
               return extractRows(res);
             } catch (err) {
               if (DataSourceAdapter.isTimeoutError(err)) {
-                const msg = `/ledgers/search page ${p} timed out — stopping pagination early`;
+                const msg = `/ledgers/search [${ledgerType}] page ${p} timed out — stopping pagination early`;
                 console.warn(`[DataSourceAdapter] WARNING: ${msg}`);
                 this._warnings.push(msg);
                 return null;
@@ -837,9 +973,8 @@ export class DataSourceAdapter {
 
     const kept = all.length;
     console.log(
-      `[fetchLedgers] fetched ${total} total | kept ${kept} ` +
-      `(type filter: -${typeDiscarded}, archived: -${archivedDiscarded}, ` +
-      `old-recovered: -${oldRecoveredDiscarded})`,
+      `[fetchLedgers ${ledgerType}] fetched ${total} total | kept ${kept} ` +
+      `(archived: -${archivedDiscarded}, old-recovered: -${oldRecoveredDiscarded})`,
     );
 
     return all;

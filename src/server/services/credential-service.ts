@@ -198,9 +198,10 @@ export async function getCredentials(
 export async function verifyCredentials(firmId: string): Promise<boolean> {
   let email: string;
   let password: string;
+  let code: number;
 
   try {
-    ({ email, password } = await getCredentials(firmId));
+    ({ email, password, code } = await getCredentials(firmId));
   } catch {
     return false;
   }
@@ -208,10 +209,12 @@ export async function verifyCredentials(firmId: string): Promise<boolean> {
   const baseUrl = process.env['YAO_API_BASE_URL'] ?? 'https://api.yao.legal';
 
   try {
+    // Yao requires the per-firm MFA code at login — send it so verification
+    // matches the exact request DataSourceAdapter.authenticate() makes at pull time.
     const response = await fetch(`${baseUrl}/attorneys/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, code }),
     });
 
     const valid = response.ok;
