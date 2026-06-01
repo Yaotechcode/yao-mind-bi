@@ -44,7 +44,8 @@
       "Bash(echo \"EXIT:$?\")",
       "Bash(echo \"Done:$?\")",
       "Bash(echo \"Exit: $?\")",
-      "Bash(GIT_EDITOR=true git rebase:*)"
+      "Bash(GIT_EDITOR=true git rebase:*)",
+      "Bash(tee /tmp/tsc-before.txt)"
     ]
   }
 }
