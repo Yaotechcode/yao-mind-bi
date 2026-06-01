@@ -6,12 +6,14 @@
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { CalculationStatusBanner } from '@/components/layout/CalculationStatusBanner';
+import { SyncStatus } from '@/components/sync/SyncStatus';
 
 export default function DashboardLayout() {
   return (
     <div className="min-h-screen flex w-full bg-background">
       <Sidebar />
       <div className="flex-1 flex flex-col min-w-0">
+        <SyncStatus />
         <CalculationStatusBanner />
         <main className="flex-1 overflow-auto pl-8 pb-12">
           <Outlet />
