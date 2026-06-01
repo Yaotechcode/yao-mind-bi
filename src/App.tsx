@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
 import { ConfigProvider } from '@/providers/ConfigProvider';
+import { YaoSyncProvider } from '@/hooks/useYaoSync';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
 // Auth pages
@@ -135,7 +136,9 @@ export default function App() {
         <BrowserRouter>
           <AuthProvider>
             <ConfigProvider>
-              <AppRoutes />
+              <YaoSyncProvider>
+                <AppRoutes />
+              </YaoSyncProvider>
             </ConfigProvider>
           </AuthProvider>
         </BrowserRouter>
