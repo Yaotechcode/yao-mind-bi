@@ -11,6 +11,7 @@ import { useConfig } from '@/hooks/useConfig';
 import { DashboardSection } from '@/components/common/DashboardSection';
 import { Button } from '@/components/ui/button';
 import { AlertCard } from '@/components/common/AlertCard';
+import { YaoConnection } from '@/components/settings/YaoConnection';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -296,6 +297,9 @@ export function StandardSettings() {
           action={{ label: 'Recalculate', onClick: () => setNeedsRecalc(false) }}
         />
       )}
+
+      {/* Yao API Connection (admin/owner only — component self-hides) */}
+      <YaoConnection />
 
       {/* 1. Firm Profile */}
       <DashboardSection title="Firm Profile">
